@@ -81,6 +81,7 @@ tasks.named("test", Test).configure {
 // drift the day somebody redraws it and only finds one of them. Both loaders still take the file at
 // the jar's root for their mod list, which is where each of them looks.
 tasks.named("processResources", ProcessResources).configure {
+	duplicatesStrategy = DuplicatesStrategy.INCLUDE
 	from("src/main/resources/vitrail.png") {
 		into "assets/vitrail/textures/gui"
 		rename { "config-icon.png" }
@@ -117,5 +118,57 @@ def writeBuildIdentity = tasks.register("writeBuildIdentity") {
 	}
 }
 
-// The task rather than its directory, so that processResources waits for it without being told.
+// Builds the vitrail_dlss native bridge DLL on Windows using CMake if available.
+// Bundles the resulting DLL into the jar under natives/windows/x86_64/ so the runtime
+// can unpack it if not already present on disk.
+def nativeSourceDir = rootProject.file("native/dlss")
+def nativeOutputDir = layout.buildDirectory.dir("generated/resources/native-dlss")
+
+def buildNativeDlss = tasks.register("buildNativeDlss") {
+	description = "Builds the native vitrail_dlss bridge library via CMake."
+
+	inputs.dir(nativeSourceDir.toPath().resolve("src"))
+	inputs.dir(nativeSourceDir.toPath().resolve("include"))
+	inputs.file(nativeSourceDir.toPath().resolve("CMakeLists.txt"))
+	outputs.dir(nativeOutputDir)
+
+	onlyIf {
+		org.gradle.internal.os.OperatingSystem.current().isWindows()
+	}
+
+	doLast {
+		def outDir = nativeOutputDir.get().asFile
+		def targetDir = new File(outDir, "natives/windows/x86_64")
+		targetDir.mkdirs()
+
+		def buildDir = new File(nativeSourceDir, "build")
+		def releaseDll = new File(buildDir, "Release/vitrail_dlss.dll")
+
+		// 1. Configure CMake if CMakeCache.txt does not exist
+		if (!new File(buildDir, "CMakeCache.txt").exists()) {
+			providers.exec {
+				it.workingDir = nativeSourceDir
+				it.commandLine "cmake", "-B", "build", "-S", "."
+			}.result.get().rethrowFailure()
+		}
+
+		// 2. Build Release config
+		providers.exec {
+			it.workingDir = nativeSourceDir
+			it.commandLine "cmake", "--build", "build", "--config", "Release"
+		}.result.get().rethrowFailure()
+
+		if (releaseDll.exists()) {
+			project.copy {
+				from releaseDll
+				into targetDir
+			}
+		} else {
+			throw new GradleException("buildNativeDlss failed: ${releaseDll} not found")
+		}
+	}
+}
+
+// The tasks rather than their directories, so that processResources waits for them without being told.
 sourceSets.main.resources.srcDir(writeBuildIdentity)
+sourceSets.main.resources.srcDir(buildNativeDlss)

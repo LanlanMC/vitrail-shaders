@@ -140,6 +140,28 @@ public abstract class VulkanBackendMixin {
 	private static final VulkanFeature GEOMETRY_SHADER = new VulkanFeature(
 			VulkanFeatureSets.VK10_FEATURES_STRUCT, "geometryShader");
 
+	@Unique
+	private static final VulkanFeature BUFFER_DEVICE_ADDRESS = new VulkanFeature(
+			VulkanFeatureSets.VK12_FEATURES_STRUCT, "bufferDeviceAddress");
+
+	@Unique
+	private static final VulkanFeature TIMELINE_SEMAPHORE = new VulkanFeature(
+			VulkanFeatureSets.VK12_FEATURES_STRUCT, "timelineSemaphore");
+
+	@Unique
+	private static final List<String> DLSS_DEVICE_EXTENSIONS = List.of(
+			"VK_NVX_binary_import",
+			"VK_NVX_image_view_handle",
+			"VK_KHR_push_descriptor",
+			"VK_KHR_buffer_device_address",
+			"VK_EXT_buffer_device_address",
+			"VK_KHR_timeline_semaphore",
+			"VK_KHR_external_memory",
+			"VK_KHR_external_memory_win32",
+			"VK_KHR_external_semaphore",
+			"VK_KHR_external_semaphore_win32"
+	);
+
 	// The Vulkan stage bit of each stage a pack ships, to read the stages a device names.
 	@Unique
 	private static final Map<ProgramStage, Integer> STAGE_BITS = Map.of(
@@ -225,6 +247,16 @@ public abstract class VulkanBackendMixin {
 		if (!vendor.isEmpty()) {
 			Vitrail.logger().info("Vulkan vendor extensions: {}", String.join(", ", vendor));
 		}
+		List<String> dlssExts = new ArrayList<>();
+		for (String ext : DLSS_DEVICE_EXTENSIONS) {
+			if (physical.hasDeviceExtension(ext)) {
+				extensions.add(ext);
+				dlssExts.add(ext);
+			}
+		}
+		if (!dlssExts.isEmpty()) {
+			Vitrail.logger().info("Vulkan DLSS extensions: {}", String.join(", ", dlssExts));
+		}
 		// And the stages the device runs subgroup operations in, which the compiler does not know
 		// either: MoltenVK leaves the vertex stage out, where SPIRV-Cross refuses a module using them.
 		Set<ProgramStage> noSubgroups = VendorExtensions.serveSubgroupStages(subgroupStages(physical));
@@ -240,6 +272,8 @@ public abstract class VulkanBackendMixin {
 		enable(physical, features, UNIFORM_STORAGE_16, enabled, NARROW);
 		enable(physical, features, STORAGE_8, enabled, NARROW);
 		enable(physical, features, UNIFORM_STORAGE_8, enabled, NARROW);
+		enable(physical, features, BUFFER_DEVICE_ADDRESS, enabled, "DLSS buffer device address");
+		enable(physical, features, TIMELINE_SEMAPHORE, enabled, "DLSS timeline semaphore");
 		if (!enabled.isEmpty()) {
 			Vitrail.logger().info("Vulkan device features: {}", String.join(", ", enabled));
 		}

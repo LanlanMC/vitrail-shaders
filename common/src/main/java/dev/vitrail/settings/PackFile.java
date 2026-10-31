@@ -36,7 +36,7 @@ import java.util.Locale;
  * settings be run against the pack corpus without starting the game.
  */
 public record PackFile(String name, boolean enabled, int shadowDistance, int renderScale,
-		int shadowMapScale) {
+		int shadowMapScale, String dlssMode, String dlssPreset, int dlssSharpness) {
 
 	/** The word that means no pack rather than the name of one, kept from the one line format. */
 	public static final String NONE = "none";
@@ -46,6 +46,9 @@ public record PackFile(String name, boolean enabled, int shadowDistance, int ren
 	private static final String SHADOW_DISTANCE_KEY = "shadowdistance";
 	private static final String RENDER_SCALE_KEY = "renderscale";
 	private static final String SHADOW_MAP_SCALE_KEY = "shadowmapscale";
+	private static final String DLSS_MODE_KEY = "dlssmode";
+	private static final String DLSS_PRESET_KEY = "dlsspreset";
+	private static final String DLSS_SHARPNESS_KEY = "dlsssharpness";
 
 	/**
 	 * The range the shadow distance is offered and stored over, in CHUNKS, and Iris's own: zero to
@@ -96,12 +99,22 @@ public record PackFile(String name, boolean enabled, int shadowDistance, int ren
 	public static final int MAX_SHADOW_MAP_SCALE = 100;
 	public static final int DEFAULT_SHADOW_MAP_SCALE = MAX_SHADOW_MAP_SCALE;
 
+	public static final String DEFAULT_DLSS_MODE = "off";
+	public static final String DEFAULT_DLSS_PRESET = "default";
+	public static final int MIN_DLSS_SHARPNESS = 0;
+	public static final int MAX_DLSS_SHARPNESS = 100;
+	public static final int DEFAULT_DLSS_SHARPNESS = 35;
+
 	/** Nothing chosen. Shaders are on, so choosing a pack is all it takes to draw one. */
 	public static final PackFile EMPTY = new PackFile("", true, DEFAULT_SHADOW_DISTANCE,
-			DEFAULT_RENDER_SCALE, DEFAULT_SHADOW_MAP_SCALE);
+			DEFAULT_RENDER_SCALE, DEFAULT_SHADOW_MAP_SCALE, DEFAULT_DLSS_MODE,
+			DEFAULT_DLSS_PRESET, DEFAULT_DLSS_SHARPNESS);
 
 	public PackFile {
 		name = name.trim();
+		dlssMode = dlssMode == null || dlssMode.isBlank() ? DEFAULT_DLSS_MODE : dlssMode.trim();
+		dlssPreset = dlssPreset == null || dlssPreset.isBlank() ? DEFAULT_DLSS_PRESET : dlssPreset.trim();
+		dlssSharpness = Math.clamp(dlssSharpness, MIN_DLSS_SHARPNESS, MAX_DLSS_SHARPNESS);
 		// Clamped here rather than where the file is read, so that a number typed by hand and a
 		// number arriving from a screen are held to the same range: the value is served to the
 		// culling as a distance and a negative one there means something else entirely. Both scales
@@ -140,9 +153,9 @@ public record PackFile(String name, boolean enabled, int shadowDistance, int ren
 
 			return NONE.equalsIgnoreCase(bare)
 					? new PackFile("", false, DEFAULT_SHADOW_DISTANCE, DEFAULT_RENDER_SCALE,
-							DEFAULT_SHADOW_MAP_SCALE)
+							DEFAULT_SHADOW_MAP_SCALE, DEFAULT_DLSS_MODE, DEFAULT_DLSS_PRESET, DEFAULT_DLSS_SHARPNESS)
 					: new PackFile(bare, true, DEFAULT_SHADOW_DISTANCE, DEFAULT_RENDER_SCALE,
-							DEFAULT_SHADOW_MAP_SCALE);
+							DEFAULT_SHADOW_MAP_SCALE, DEFAULT_DLSS_MODE, DEFAULT_DLSS_PRESET, DEFAULT_DLSS_SHARPNESS);
 		}
 
 		String name = "";
@@ -150,6 +163,9 @@ public record PackFile(String name, boolean enabled, int shadowDistance, int ren
 		int shadowDistance = DEFAULT_SHADOW_DISTANCE;
 		int renderScale = DEFAULT_RENDER_SCALE;
 		int shadowMapScale = DEFAULT_SHADOW_MAP_SCALE;
+		String dlssMode = DEFAULT_DLSS_MODE;
+		String dlssPreset = DEFAULT_DLSS_PRESET;
+		int dlssSharpness = DEFAULT_DLSS_SHARPNESS;
 		for (String line : content.lines().toList()) {
 			String trimmed = line.trim();
 			if (trimmed.isEmpty() || trimmed.startsWith("#")) {
@@ -174,12 +190,15 @@ public record PackFile(String name, boolean enabled, int shadowDistance, int ren
 				case SHADOW_DISTANCE_KEY -> shadowDistance = number(value, shadowDistance);
 				case RENDER_SCALE_KEY -> renderScale = number(value, renderScale);
 				case SHADOW_MAP_SCALE_KEY -> shadowMapScale = number(value, shadowMapScale);
+				case DLSS_MODE_KEY -> dlssMode = value;
+				case DLSS_PRESET_KEY -> dlssPreset = value;
+				case DLSS_SHARPNESS_KEY -> dlssSharpness = number(value, dlssSharpness);
 				default -> {
 				}
 			}
 		}
 
-		return new PackFile(name, enabled, shadowDistance, renderScale, shadowMapScale);
+		return new PackFile(name, enabled, shadowDistance, renderScale, shadowMapScale, dlssMode, dlssPreset, dlssSharpness);
 	}
 
 	/** The file's text, decoded rather than refused, with any byte order mark taken off. */
@@ -222,7 +241,10 @@ public record PackFile(String name, boolean enabled, int shadowDistance, int ren
 						+ ENABLED_KEY + "=" + chosen.enabled() + "\n"
 						+ SHADOW_DISTANCE_KEY + "=" + chosen.shadowDistance() + "\n"
 						+ RENDER_SCALE_KEY + "=" + chosen.renderScale() + "\n"
-						+ SHADOW_MAP_SCALE_KEY + "=" + chosen.shadowMapScale() + "\n",
+						+ SHADOW_MAP_SCALE_KEY + "=" + chosen.shadowMapScale() + "\n"
+						+ DLSS_MODE_KEY + "=" + chosen.dlssMode() + "\n"
+						+ DLSS_PRESET_KEY + "=" + chosen.dlssPreset() + "\n"
+						+ DLSS_SHARPNESS_KEY + "=" + chosen.dlssSharpness() + "\n",
 				StandardCharsets.UTF_8);
 		try {
 			try {
@@ -262,30 +284,47 @@ public record PackFile(String name, boolean enabled, int shadowDistance, int ren
 
 	public PackFile withName(String name) {
 		return new PackFile(name, this.enabled, this.shadowDistance, this.renderScale,
-				this.shadowMapScale);
+				this.shadowMapScale, this.dlssMode, this.dlssPreset, this.dlssSharpness);
 	}
 
 	public PackFile withEnabled(boolean enabled) {
 		return new PackFile(this.name, enabled, this.shadowDistance, this.renderScale,
-				this.shadowMapScale);
+				this.shadowMapScale, this.dlssMode, this.dlssPreset, this.dlssSharpness);
 	}
 
 	/** Both halves of a pack choice at once, leaving whatever else the file carries where it is. */
 	public PackFile withChoice(String name, boolean enabled) {
 		return new PackFile(name, enabled, this.shadowDistance, this.renderScale,
-				this.shadowMapScale);
+				this.shadowMapScale, this.dlssMode, this.dlssPreset, this.dlssSharpness);
 	}
 
 	public PackFile withShadowDistance(int chunks) {
-		return new PackFile(this.name, this.enabled, chunks, this.renderScale, this.shadowMapScale);
+		return new PackFile(this.name, this.enabled, chunks, this.renderScale, this.shadowMapScale,
+				this.dlssMode, this.dlssPreset, this.dlssSharpness);
 	}
 
 	public PackFile withRenderScale(int percent) {
 		return new PackFile(this.name, this.enabled, this.shadowDistance, percent,
-				this.shadowMapScale);
+				this.shadowMapScale, this.dlssMode, this.dlssPreset, this.dlssSharpness);
 	}
 
 	public PackFile withShadowMapScale(int percent) {
-		return new PackFile(this.name, this.enabled, this.shadowDistance, this.renderScale, percent);
+		return new PackFile(this.name, this.enabled, this.shadowDistance, this.renderScale, percent,
+				this.dlssMode, this.dlssPreset, this.dlssSharpness);
+	}
+
+	public PackFile withDlssMode(String mode) {
+		return new PackFile(this.name, this.enabled, this.shadowDistance, this.renderScale,
+				this.shadowMapScale, mode, this.dlssPreset, this.dlssSharpness);
+	}
+
+	public PackFile withDlssPreset(String preset) {
+		return new PackFile(this.name, this.enabled, this.shadowDistance, this.renderScale,
+				this.shadowMapScale, this.dlssMode, preset, this.dlssSharpness);
+	}
+
+	public PackFile withDlssSharpness(int sharpness) {
+		return new PackFile(this.name, this.enabled, this.shadowDistance, this.renderScale,
+				this.shadowMapScale, this.dlssMode, this.dlssPreset, sharpness);
 	}
 }

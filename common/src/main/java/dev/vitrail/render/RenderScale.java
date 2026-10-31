@@ -1,7 +1,12 @@
 package dev.vitrail.render;
 
+import dev.vitrail.mixin.access.GpuDeviceAccessor;
 import dev.vitrail.mixin.access.LevelRendererOutlineAccessor;
 import dev.vitrail.mixin.access.RenderTargetAccessor;
+import dev.vitrail.render.dlss.DlssBridge;
+import dev.vitrail.render.dlss.DlssMode;
+import dev.vitrail.render.dlss.DlssOptimalSettings;
+import dev.vitrail.render.dlss.DlssVulkanHandles;
 import dev.vitrail.settings.PackFile;
 import dev.vitrail.Vitrail;
 
@@ -17,19 +22,24 @@ import com.mojang.blaze3d.shaders.ShaderSource;
 import com.mojang.blaze3d.shaders.ShaderType;
 import com.mojang.blaze3d.systems.CommandEncoder;
 import com.mojang.blaze3d.systems.GpuDevice;
+import com.mojang.blaze3d.systems.GpuDeviceBackend;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.vulkan.VulkanDevice;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.resources.Identifier;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Renders the world at a fraction of the window and upscales the finished image before the
@@ -272,7 +282,7 @@ public final class RenderScale {
 	 * move is one less thing to keep in step. The reference's optional noise-detection term is
 	 * left out, as the reference itself leaves it out unless a define asks for it.
 	 */
-	private static final String SHARPEN = """
+	private static final String SHARPEN_TEMPLATE = """
 			#version 460 core
 
 			uniform sampler2D InSampler;
@@ -299,11 +309,13 @@ public final class RenderScale {
 				vec3 hitMax = (1.0 - max(mx4, e)) / (4.0 * mn4 - 4.0);
 				vec3 lobes = max(-hitMin, hitMax);
 				float lobe = max(-(0.25 - 1.0 / 16.0),
-						min(max(lobes.r, max(lobes.g, lobes.b)), 0.0)) * exp2(-0.2);
+						min(max(lobes.r, max(lobes.g, lobes.b)), 0.0)) * %s;
 				float weight = 1.0 / (4.0 * lobe + 1.0);
 				ofFragData0 = vec4((lobe * (b + d + f + h) + e) * weight, 1.0);
 			}
 			""";
+
+	private static final String SHARPEN = String.format(Locale.ROOT, SHARPEN_TEMPLATE, "exp2(-0.2)");
 
 	/**
 	 * The fallback when EASU or RCAS will not compile: one bilinear read, which is what the image
@@ -333,6 +345,19 @@ public final class RenderScale {
 
 			if (SHARPEN_ID.equals(id)) {
 				return SHARPEN;
+			}
+
+			if (id.getPath().contains("dlss_sharpen_")) {
+				try {
+					String path = id.getPath();
+					int idx = path.lastIndexOf('_');
+					int p = Integer.parseInt(path.substring(idx + 1));
+					float stops = (100 - Math.clamp(p, 1, 100)) * 2.5F / 100.0F;
+					return String.format(Locale.ROOT, SHARPEN_TEMPLATE,
+							String.format(Locale.ROOT, "exp2(-%.3f)", stops));
+				} catch (Exception ignored) {
+					return SHARPEN;
+				}
 			}
 
 			return BLIT_ID.equals(id) ? BLIT : null;
@@ -394,6 +419,21 @@ public final class RenderScale {
 	private static final Pass EASU = new Pass(UPSCALE_ID);
 	private static final Pass RCAS = new Pass(SHARPEN_ID);
 	private static final Pass BILINEAR = new Pass(BLIT_ID);
+	private static final Map<Integer, Pass> DLSS_RCAS_PASSES = new ConcurrentHashMap<>();
+
+	private static Pass dlssRcasPass(int percent) {
+		int clamped = Math.clamp(percent, 1, 100);
+		return DLSS_RCAS_PASSES.computeIfAbsent(clamped, p ->
+				new Pass(Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "dlss_sharpen_" + p)));
+	}
+
+	/** The DLSS mode selected by the player or system. OFF by default. */
+	private static volatile DlssMode dlssMode = DlssMode.OFF;
+	private static volatile dev.vitrail.render.dlss.DlssPreset dlssPreset = dev.vitrail.render.dlss.DlssPreset.DEFAULT;
+	private static volatile int dlssSharpness = PackFile.DEFAULT_DLSS_SHARPNESS;
+
+	/** Whether DLSS is active for the current world pass. */
+	private static boolean dlssActive;
 
 	/**
 	 * What the player asked for, as a percentage of the window; {@link #WHOLE} disengages.
@@ -419,6 +459,90 @@ public final class RenderScale {
 	 */
 	static boolean upscaling() {
 		return swapped;
+	}
+
+	/** Answers whether DLSS is currently executing the upscaling for the frame. */
+	public static boolean usingDlss() {
+		return swapped && dlssActive;
+	}
+
+	public static int renderWidth() {
+		return swapped && scaled != null ? scaled.width : 0;
+	}
+
+	public static int renderHeight() {
+		return swapped && scaled != null ? scaled.height : 0;
+	}
+
+	public static DlssMode dlssMode() {
+		return dlssMode;
+	}
+
+	public static void dlssMode(DlssMode mode) {
+		dlssMode = mode == null ? DlssMode.OFF : mode;
+		dev.vitrail.render.dlss.DlssBridge.resetInitFailure();
+	}
+
+	public static dev.vitrail.render.dlss.DlssPreset dlssPreset() {
+		return dlssPreset;
+	}
+
+	public static void dlssPreset(dev.vitrail.render.dlss.DlssPreset preset) {
+		dlssPreset = preset == null ? dev.vitrail.render.dlss.DlssPreset.DEFAULT : preset;
+	}
+
+	public static int dlssSharpness() {
+		return dlssSharpness;
+	}
+
+	public static void dlssSharpness(int sharpness) {
+		dlssSharpness = Math.clamp(sharpness, PackFile.MIN_DLSS_SHARPNESS, PackFile.MAX_DLSS_SHARPNESS);
+	}
+
+	private static final float MV_SCALE_X = Float.parseFloat(System.getProperty("vitrail.dlss.mvScaleX", "1.0"));
+	private static final float MV_SCALE_Y = Float.parseFloat(System.getProperty("vitrail.dlss.mvScaleY", "1.0"));
+	private static int dlssMissingMvFrames = 0;
+
+	private static int lastRenderWidth;
+	private static int lastRenderHeight;
+	private static int lastTargetWidth;
+	private static int lastTargetHeight;
+	private static boolean lastDlssEvaluated;
+
+	public static boolean dlssActive() {
+		return dlssActive;
+	}
+
+	public static boolean lastDlssEvaluated() {
+		return lastDlssEvaluated;
+	}
+
+	public static int lastRenderWidth() {
+		return lastRenderWidth;
+	}
+
+	public static int lastRenderHeight() {
+		return lastRenderHeight;
+	}
+
+	public static int lastTargetWidth() {
+		return lastTargetWidth;
+	}
+
+	public static int lastTargetHeight() {
+		return lastTargetHeight;
+	}
+
+	public static float mvScaleX() {
+		return MV_SCALE_X;
+	}
+
+	public static float mvScaleY() {
+		return MV_SCALE_Y;
+	}
+
+	public static boolean hasMotionVectors() {
+		return PackChain.motionVectors() != null;
 	}
 
 	/** The window-sized set the game allocated, held only while the scaled set stands in for it. */
@@ -521,15 +645,44 @@ public final class RenderScale {
 		// or the very failure that stopped scaling would freeze the outline scaled for good; and a
 		// world no pack draws stands down with them, the promise of the None road being that the
 		// game is left untouched.
-		if (asked >= WHOLE || !worldComing || !PackChain.drawingPack() || BILINEAR.refused) {
+		DlssMode currentDlss = dlssMode;
+		boolean dlssWanted = currentDlss.enabled() && DlssBridge.isAvailable();
+		if ((asked >= WHOLE && !dlssWanted) || !worldComing || !PackChain.drawingPack() || BILINEAR.refused) {
 			standDown(main);
 
 			return false;
 		}
 
-		int width = Math.max(1, main.width * asked / WHOLE);
-		int height = Math.max(1, main.height * asked / WHOLE);
-		if (width >= main.width || height >= main.height) {
+		int width;
+		int height;
+		if (dlssWanted) {
+			ensureDlssInit();
+			if (!DlssBridge.isInitialized()) {
+				standDown(main);
+
+				return false;
+			}
+			DlssOptimalSettings optimal = DlssBridge.queryOptimalSettings(main.width, main.height, currentDlss);
+			width = optimal.renderWidth();
+			height = optimal.renderHeight();
+			dlssActive = true;
+			lastRenderWidth = width;
+			lastRenderHeight = height;
+			lastTargetWidth = main.width;
+			lastTargetHeight = main.height;
+		} else {
+			width = Math.max(1, main.width * asked / WHOLE);
+			height = Math.max(1, main.height * asked / WHOLE);
+			dlssActive = false;
+			lastRenderWidth = 0;
+			lastRenderHeight = 0;
+			lastTargetWidth = 0;
+			lastTargetHeight = 0;
+			lastDlssEvaluated = false;
+		}
+
+		if ((currentDlss != DlssMode.DLAA && (width >= main.width || height >= main.height))
+				|| width > main.width || height > main.height) {
 			standDown(main);
 
 			return false;
@@ -560,6 +713,10 @@ public final class RenderScale {
 		main.height = height;
 		swapped = true;
 
+		if (dlssActive) {
+			dev.vitrail.render.dlss.DlssJitter.advance();
+		}
+
 		return true;
 	}
 
@@ -581,6 +738,26 @@ public final class RenderScale {
 
 		GpuDevice device = RenderSystem.getDevice();
 		GpuTextureView world = ((RenderTargetAccessor) scaled).vitrail$colorTextureView();
+
+		// DLSS evaluation branch
+		if (dlssActive && dlssEvaluate(encoder, device, main)) {
+			if (upscaled != null) {
+				int sharpness = dlssSharpness;
+				RenderPipeline sharp = sharpness > 0 ? dlssRcasPass(sharpness).get(device) : null;
+				if (sharp != null) {
+					draw(encoder, device, sharp, upscaled.view(), fullColorView(main), FilterMode.NEAREST,
+							SHARPEN_LABEL);
+				} else {
+					RenderPipeline fallback = BILINEAR.get(device);
+					if (fallback != null) {
+						draw(encoder, device, fallback, upscaled.view(), fullColorView(main), FilterMode.NEAREST,
+								UPSCALE_LABEL);
+					}
+				}
+			}
+			return;
+		}
+
 		RenderPipeline easu = EASU.get(device);
 		RenderPipeline rcas = easu == null ? null : RCAS.get(device);
 		if (easu != null && rcas != null && upscaled != null) {
@@ -611,6 +788,103 @@ public final class RenderScale {
 		release();
 	}
 
+	private static void ensureDlssInit() {
+		if (!DlssBridge.isInitialized()) {
+			GpuDevice device = RenderSystem.tryGetDevice();
+			Object backend = device instanceof GpuDeviceAccessor acc ? acc.vitrail$backend() : null;
+			if (backend instanceof VulkanDevice vulkan) {
+				DlssBridge.init(vulkan, Vitrail.platform().gameDirectory().resolve("logs"));
+			}
+		}
+	}
+
+	private static boolean dlssEvaluate(CommandEncoder encoder, GpuDevice device, RenderTarget main) {
+		if (!DlssBridge.isInitialized()) {
+			return false;
+		}
+
+		RenderTargetAccessor scaledAcc = (RenderTargetAccessor) scaled;
+		RenderTargetAccessor mainAcc = (RenderTargetAccessor) main;
+
+		GpuTexture inColor = scaledAcc.vitrail$colorTexture();
+		GpuTextureView inColorView = scaledAcc.vitrail$colorTextureView();
+		GpuTexture outColor = upscaled != null ? upscaled.texture() : mainAcc.vitrail$colorTexture();
+		GpuTextureView outColorView = upscaled != null ? upscaled.storageView() : mainAcc.vitrail$colorTextureView();
+		GpuTexture inDepth = scaledAcc.vitrail$depthTexture();
+		GpuTextureView inDepthView = scaledAcc.vitrail$depthTextureView();
+
+		GpuTexture mvTex = PackChain.motionVectorsTexture();
+		GpuTextureView mvView = PackChain.motionVectors();
+
+		long cmdBuffer = DlssVulkanHandles.vkCommandBuffer(encoder);
+		if (cmdBuffer == 0L || inColor == null || outColor == null || inDepth == null) {
+			return false;
+		}
+
+		if (mvTex == null || mvView == null) {
+			dlssMissingMvFrames++;
+			if (dlssMissingMvFrames >= 60) {
+				DlssBridge.warnUser("运动矢量持续缺失，DLSS 无法工作 (已回退到基础缩放)");
+			}
+			return false;
+		}
+		dlssMissingMvFrames = 0;
+
+		dev.vitrail.render.dlss.DlssPreset preset = dlssPreset;
+		float sharpness = 0.0F;
+
+		// Ensure feature created and matches current render and target resolutions and preset
+		if (!DlssBridge.isFeatureMatching(scaled.width, scaled.height, main.width, main.height, preset)) {
+			DlssBridge.releaseFeature();
+			boolean created = DlssBridge.createFeature(
+					cmdBuffer,
+					scaled.width, scaled.height,
+					main.width, main.height,
+					dlssMode.ngxPerfQualityValue(),
+					false, true, true, sharpness,
+					preset
+			);
+			if (!created) {
+				return false;
+			}
+		}
+
+		long inColorVk = DlssVulkanHandles.vkImage(inColor);
+		long inColorViewVk = DlssVulkanHandles.vkImageView(inColorView);
+		int inColorFormat = DlssVulkanHandles.vkFormat(inColor);
+
+		long outColorVk = DlssVulkanHandles.vkImage(outColor);
+		long outColorViewVk = DlssVulkanHandles.vkImageView(outColorView);
+		int outColorFormat = DlssVulkanHandles.vkFormat(outColor);
+
+		long inDepthVk = DlssVulkanHandles.vkImage(inDepth);
+		long inDepthViewVk = DlssVulkanHandles.vkImageView(inDepthView);
+		int inDepthFormat = DlssVulkanHandles.vkFormat(inDepth);
+
+		long mvVk = mvTex == null ? 0L : DlssVulkanHandles.vkImage(mvTex);
+		long mvViewVk = mvView == null ? 0L : DlssVulkanHandles.vkImageView(mvView);
+		int mvFormat = mvTex == null ? 0 : DlssVulkanHandles.vkFormat(mvTex);
+
+		float mvScaleX = MV_SCALE_X;
+		float mvScaleY = MV_SCALE_Y;
+
+		boolean evaluated = DlssBridge.evaluate(
+				cmdBuffer,
+				inColorViewVk, inColorVk, inColorFormat,
+				outColorViewVk, outColorVk, outColorFormat,
+				inDepthViewVk, inDepthVk, inDepthFormat,
+				mvViewVk, mvVk, mvFormat,
+				0L, 0L, 0,
+				dev.vitrail.render.dlss.DlssJitter.jitterX(),
+				dev.vitrail.render.dlss.DlssJitter.jitterY(),
+				mvScaleX, mvScaleY,
+				sharpness,
+				false
+		);
+		lastDlssEvaluated = evaluated;
+		return evaluated;
+	}
+
 	/**
 	 * Frees everything the scale holds, at the end of the session and while the device is still
 	 * alive, which is {@code EngineStages.closeClient}'s moment.
@@ -635,6 +909,8 @@ public final class RenderScale {
 			restore(main);
 		}
 
+		DlssBridge.shutdown();
+
 		release();
 		if (quad != null) {
 			quad.close();
@@ -657,6 +933,10 @@ public final class RenderScale {
 	}
 
 	private static void release() {
+		dlssActive = false;
+		lastDlssEvaluated = false;
+		DlssBridge.releaseFeature();
+
 		if (scaled != null) {
 			scaled.destroyBuffers();
 			scaled = null;
@@ -717,7 +997,7 @@ public final class RenderScale {
 			}
 
 			if (upscaled == null) {
-				upscaled = new TargetSurface(UPSCALE_LABEL, FORMAT, false, outWidth, outHeight);
+				upscaled = new TargetSurface(UPSCALE_LABEL, FORMAT, false, true, outWidth, outHeight);
 			} else if (upscaled.width() != outWidth || upscaled.height() != outHeight) {
 				upscaled.resize(outWidth, outHeight);
 			}

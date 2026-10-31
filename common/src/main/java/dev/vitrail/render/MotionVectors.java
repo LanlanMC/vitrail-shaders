@@ -19,6 +19,7 @@ import com.mojang.blaze3d.systems.GpuDevice;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.FilterMode;
+import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import net.minecraft.client.renderer.BindGroupLayouts;
@@ -224,6 +225,11 @@ final class MotionVectors {
 	/** This frame's vectors, or null while nothing has drawn them. */
 	GpuTextureView view() {
 		return this.drawn ? this.vectors.view() : null;
+	}
+
+	/** This frame's vectors texture, or null while nothing has drawn them. */
+	GpuTexture texture() {
+		return this.drawn && this.vectors != null ? this.vectors.texture() : null;
 	}
 
 	/**

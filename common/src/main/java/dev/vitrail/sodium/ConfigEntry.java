@@ -4,10 +4,14 @@ import dev.vitrail.cache.ModuleCache;
 import dev.vitrail.HostReport;
 import dev.vitrail.IrisBeside;
 import dev.vitrail.render.PackChoice;
+import dev.vitrail.render.RenderScale;
 import dev.vitrail.render.ShadowAmortisation;
 import dev.vitrail.render.StartupGuard;
 import dev.vitrail.render.TemporalAccumulation;
 import dev.vitrail.render.TerrainDraw;
+import dev.vitrail.render.dlss.DlssBridge;
+import dev.vitrail.render.dlss.DlssMode;
+import dev.vitrail.render.dlss.DlssPreset;
 import dev.vitrail.screen.CompileCard;
 import dev.vitrail.screen.PackScreens;
 import dev.vitrail.ScreenText;
@@ -41,8 +45,9 @@ import java.util.Set;
  * This is the same entry the reference takes, {@code IrisConfig} in its own tree, and by the same
  * public API rather than by reaching into Sodium: one page under the mod's own name, which opens
  * the pack screen with the video settings as the screen to come back to, and an offer to switch to
- * Vulkan on any other backend, Iris beside it or not ({@link PackScreens}), and, on Vulkan alone, a
- * second page for the settings that are this engine's own rather than a pack's. That second page is thin on purpose:
+ * Vulkan on any other backend, Iris beside it or not ({@link PackScreens}), and, on Vulkan alone,
+ * pages for the settings that are this engine's own rather than a pack's (one for general settings and
+ * one for super-resolution options). Those pages are thin on purpose:
  * almost everything this engine has to offer is the pack's and lives on the pack's pages, and only
  * what a player sets over every pack belongs here. The one thing registered that is not a page is an
  * overlay over an option of Sodium's own, whose reason is written where it is registered.
@@ -82,6 +87,18 @@ public final class ConfigEntry implements ConfigEntryPoint {
 	/** The fraction of the window the world renders at, beside the distance above. */
 	private static final Identifier RENDER_SCALE =
 			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "render_scale");
+
+	/** The NVIDIA DLSS mode, beside the render scale. */
+	private static final Identifier DLSS_MODE =
+			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "dlss_mode");
+
+	/** The NVIDIA DLSS model preset, beside the DLSS mode. */
+	private static final Identifier DLSS_PRESET =
+			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "dlss_preset");
+
+	/** The NVIDIA DLSS sharpness percentage, beside the DLSS mode. */
+	private static final Identifier DLSS_SHARPNESS =
+			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "dlss_sharpness");
 
 	/** The fraction of the shadow map the pack asked for that is drawn, beside both. */
 	private static final Identifier SHADOW_MAP_SCALE =
@@ -135,12 +152,18 @@ public final class ConfigEntry implements ConfigEntryPoint {
 					.addOptionGroup(builder.createOptionGroup()
 							.addOption(shadowDistance(builder))
 							.addOption(shadowMapScale(builder))
-							.addOption(renderScale(builder))
-							.addOption(temporalFold(builder))
 							.addOption(shadowAmortisation(builder))
 							.addOption(graphicsApi(builder))
 							.addOption(moduleCacheCeiling(builder))
 							.addOption(compileCard(builder))));
+			options.addPage(builder.createOptionPage()
+					.setName(Component.translatable(ScreenText.SUPER_RESOLUTION_TITLE))
+					.addOptionGroup(builder.createOptionGroup()
+							.addOption(renderScale(builder))
+							.addOption(dlssMode(builder))
+							.addOption(dlssPreset(builder))
+							.addOption(dlssSharpness(builder))
+							.addOption(temporalFold(builder))));
 		}
 
 		// Only on the backend this engine draws on. Anywhere else the pack draws nothing, so RGSS
@@ -206,12 +229,67 @@ public final class ConfigEntry implements ConfigEntryPoint {
 				.setBinding(percent -> PackChoice.renderScale(Vitrail.platform().gameDirectory(),
 								percent),
 						PackChoice::renderScale)
+				.setEnabledProvider(state -> state.readEnumOption(DLSS_MODE, DlssMode.class) == DlssMode.OFF,
+						DLSS_MODE)
 				.setValueFormatter(percent -> Component.literal(percent + "%"))
 				// Sodium refuses to build an option without one, at the loading screen and not at
 				// compile time. The binding above has already written pack.txt.
 				.setStorageHandler(() -> {})
 				.setImpact(OptionImpact.HIGH);
 	}
+
+	/**
+	 * NVIDIA DLSS Super Resolution quality mode.
+	 * <p>
+	 * Upscales lower resolution rendering to native display resolution using NVIDIA Tensor Cores.
+	 * Enabled only if the runtime DLSS bridge detects driver support and hardware capability.
+	 */
+	private static OptionBuilder dlssMode(ConfigBuilder builder) {
+		return builder.createEnumOption(DLSS_MODE, DlssMode.class)
+				.setName(Component.translatable(ScreenText.DLSS_MODE))
+				.setTooltip(_ -> Component.translatable(ScreenText.DLSS_MODE_TOOLTIP))
+				.setDefaultValue(DlssMode.OFF)
+				.setBinding(mode -> PackChoice.dlssMode(Vitrail.platform().gameDirectory(), mode),
+						PackChoice::dlssMode)
+				.setElementNameProvider(mode -> Component.translatable(mode.translationKey()))
+				.setEnabledProvider(state -> DlssBridge.isAvailable())
+				.setStorageHandler(() -> {})
+				.setImpact(OptionImpact.HIGH);
+	}
+
+	private static OptionBuilder dlssPreset(ConfigBuilder builder) {
+		DlssPreset[] values = DlssPreset.values();
+		return builder.createIntegerOption(DLSS_PRESET)
+				.setName(Component.translatable(ScreenText.DLSS_PRESET))
+				.setTooltip(_ -> Component.translatable(ScreenText.DLSS_PRESET_TOOLTIP))
+				.setDefaultValue(DlssPreset.DEFAULT.ordinal())
+				.setRange(0, values.length - 1, 1)
+				.setBinding(idx -> PackChoice.dlssPreset(Vitrail.platform().gameDirectory(),
+								values[Math.clamp(idx, 0, values.length - 1)]),
+						() -> PackChoice.dlssPreset().ordinal())
+				.setValueFormatter(idx -> Component.translatable(
+						values[Math.clamp(idx, 0, values.length - 1)].translationKey()))
+				.setEnabledProvider(state -> state.readEnumOption(DLSS_MODE, DlssMode.class) != DlssMode.OFF
+						&& DlssBridge.isAvailable(), DLSS_MODE)
+				.setStorageHandler(() -> {})
+				.setImpact(OptionImpact.MEDIUM);
+	}
+
+	private static OptionBuilder dlssSharpness(ConfigBuilder builder) {
+		return builder.createIntegerOption(DLSS_SHARPNESS)
+				.setName(Component.translatable(ScreenText.DLSS_SHARPNESS))
+				.setTooltip(_ -> Component.translatable(ScreenText.DLSS_SHARPNESS_TOOLTIP))
+				.setDefaultValue(PackFile.DEFAULT_DLSS_SHARPNESS)
+				.setRange(new Range(PackFile.MIN_DLSS_SHARPNESS, PackFile.MAX_DLSS_SHARPNESS, 5))
+				.setBinding(sharpness -> PackChoice.dlssSharpness(Vitrail.platform().gameDirectory(), sharpness),
+						PackChoice::dlssSharpness)
+				.setEnabledProvider(state -> state.readEnumOption(DLSS_MODE, DlssMode.class) != DlssMode.OFF
+						&& DlssBridge.isAvailable(), DLSS_MODE)
+				.setValueFormatter(sharpness -> Component.literal(sharpness + "%"))
+				.setStorageHandler(() -> {})
+				.setImpact(OptionImpact.LOW);
+	}
+
 
 	/**
 	 * How much of the shadow map the pack asked for is drawn, as a percentage on each axis, stored
@@ -307,8 +385,9 @@ public final class ConfigEntry implements ConfigEntryPoint {
 				.setTooltip(_ -> Component.translatable(ScreenText.TEMPORAL_FOLD_TOOLTIP))
 				.setDefaultValue(TemporalAccumulation.DEFAULT_WANTED)
 				.setBinding(TemporalAccumulation::setWanted, TemporalAccumulation::wanted)
-				.setEnabledProvider(state -> state.readIntOption(RENDER_SCALE) < PackFile.MAX_RENDER_SCALE,
-						RENDER_SCALE)
+				.setEnabledProvider(state -> state.readEnumOption(DLSS_MODE, DlssMode.class) == DlssMode.OFF
+								&& state.readIntOption(RENDER_SCALE) < PackFile.MAX_RENDER_SCALE,
+						DLSS_MODE, RENDER_SCALE)
 				.setStorageHandler(() -> {})
 				.setImpact(OptionImpact.MEDIUM);
 	}

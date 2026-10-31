@@ -4,6 +4,10 @@ import dev.vitrail.HostReport;
 import dev.vitrail.Vitrail;
 import dev.vitrail.render.PackChain;
 import dev.vitrail.render.PackChoice;
+import dev.vitrail.render.RenderScale;
+import dev.vitrail.render.dlss.DlssBridge;
+import dev.vitrail.render.dlss.DlssJitter;
+import dev.vitrail.render.dlss.DlssMode;
 import dev.vitrail.settings.PackSession;
 import dev.vitrail.sodium.ShadowTerrain;
 
@@ -16,6 +20,8 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 import org.jspecify.annotations.Nullable;
+
+import java.util.Locale;
 
 /**
  * The engine's lines of the F3 screen, in Iris's wording so a capture of one reads against a
@@ -76,6 +82,55 @@ public final class VitrailDebugEntry implements DebugScreenEntry {
 				shadowLines(displayer);
 			}
 		}, () -> displayer.addToGroup(GROUP, PREFIX + undrawnLine()));
+
+		dlssLines(displayer);
+	}
+
+	private static void dlssLines(DebugScreenDisplayer displayer) {
+		if (!DlssBridge.isAvailable()) {
+			displayer.addToGroup(GROUP, PREFIX + "DLSS: Unsupported");
+			return;
+		}
+
+		DlssMode mode = RenderScale.dlssMode();
+		if (!mode.enabled()) {
+			displayer.addToGroup(GROUP, PREFIX + "DLSS: Off");
+			return;
+		}
+
+		String status = RenderScale.lastDlssEvaluated() ? "Active"
+				: (RenderScale.dlssActive() ? "Evaluating" : "Idle");
+		displayer.addToGroup(GROUP, String.format(Locale.ROOT,
+				"%sDLSS: %s (%s) [Preset %s, Sharp: %d%%]",
+				PREFIX, mode.name(), status,
+				RenderScale.dlssPreset().name().replace("PRESET_", ""),
+				RenderScale.dlssSharpness()));
+
+		int rw = RenderScale.lastRenderWidth();
+		int rh = RenderScale.lastRenderHeight();
+		int tw = RenderScale.lastTargetWidth();
+		int th = RenderScale.lastTargetHeight();
+		if (rw > 0 && rh > 0 && tw > 0 && th > 0) {
+			float pct = (float) rw / (float) tw * 100.0F;
+			displayer.addToGroup(GROUP, String.format(Locale.ROOT,
+					"%sDLSS Res: %dx%d -> %dx%d (%.1f%%)", PREFIX, rw, rh, tw, th, pct));
+		}
+
+		float jx = DlssJitter.jitterX();
+		float jy = DlssJitter.jitterY();
+		int phase = DlssJitter.currentPhase();
+		int phaseCount = DlssJitter.phaseCount();
+		boolean jitterOn = DlssJitter.isJitterEnabled();
+		displayer.addToGroup(GROUP, String.format(Locale.ROOT,
+				"%sDLSS Jitter: (%+.4f, %+.4f) [Phase %d/%d, %s]",
+				PREFIX, jx, jy, phase, phaseCount, jitterOn ? "On" : "Off"));
+
+		boolean hasMv = RenderScale.hasMotionVectors();
+		float mvX = RenderScale.mvScaleX();
+		float mvY = RenderScale.mvScaleY();
+		displayer.addToGroup(GROUP, String.format(Locale.ROOT,
+				"%sDLSS Motion: %s (Scale: %.1f, %.1f)",
+				PREFIX, hasMv ? "Present" : "Missing", mvX, mvY));
 	}
 
 	private static String profileLine(PackSession session) {

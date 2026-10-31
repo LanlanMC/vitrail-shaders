@@ -189,6 +189,9 @@ public final class PackChoice {
 			// below that draw nothing need no line of their own to keep the world at the window.
 			shadowDistance = askedFor.shadowDistance();
 			RenderScale.wanted(askedFor.renderScale());
+			RenderScale.dlssMode(parseDlssMode(askedFor.dlssMode()));
+			RenderScale.dlssPreset(parseDlssPreset(askedFor.dlssPreset()));
+			RenderScale.dlssSharpness(askedFor.dlssSharpness());
 			// Here and not lower down, because it is read during the expansion of the pack's very
 			// first unit: the shadow map's size is a declaration of the pack's own text, and the
 			// scale is applied by rewriting that declaration rather than by allocating something
@@ -986,6 +989,79 @@ public final class PackChoice {
 		}
 
 		reload(gameDirectory);
+	}
+
+	public static dev.vitrail.render.dlss.DlssMode dlssMode() {
+		return RenderScale.dlssMode();
+	}
+
+	public static void dlssMode(Path gameDirectory, dev.vitrail.render.dlss.DlssMode mode) {
+		dev.vitrail.render.dlss.DlssMode actual = mode == null ? dev.vitrail.render.dlss.DlssMode.OFF : mode;
+		RenderScale.dlssMode(actual);
+		askedFor = askedFor.withDlssMode(actual.name().toLowerCase(Locale.ROOT));
+
+		Path file = packFile(gameDirectory);
+		try {
+			PackFile.write(file, PackFile.read(file).withDlssMode(actual.name().toLowerCase(Locale.ROOT)));
+		} catch (IOException | RuntimeException e) {
+			Vitrail.logger().error("Vitrail could not write the DLSS mode to {}", file, e);
+		}
+	}
+
+	private static dev.vitrail.render.dlss.DlssMode parseDlssMode(String name) {
+		if (name == null || name.isBlank()) {
+			return dev.vitrail.render.dlss.DlssMode.OFF;
+		}
+		try {
+			return dev.vitrail.render.dlss.DlssMode.valueOf(name.trim().toUpperCase(Locale.ROOT));
+		} catch (IllegalArgumentException e) {
+			return dev.vitrail.render.dlss.DlssMode.OFF;
+		}
+	}
+
+	public static dev.vitrail.render.dlss.DlssPreset dlssPreset() {
+		return RenderScale.dlssPreset();
+	}
+
+	public static void dlssPreset(Path gameDirectory, dev.vitrail.render.dlss.DlssPreset preset) {
+		dev.vitrail.render.dlss.DlssPreset actual = preset == null ? dev.vitrail.render.dlss.DlssPreset.DEFAULT : preset;
+		RenderScale.dlssPreset(actual);
+		askedFor = askedFor.withDlssPreset(actual.name().toLowerCase(Locale.ROOT));
+
+		Path file = packFile(gameDirectory);
+		try {
+			PackFile.write(file, PackFile.read(file).withDlssPreset(actual.name().toLowerCase(Locale.ROOT)));
+		} catch (IOException | RuntimeException e) {
+			Vitrail.logger().error("Vitrail could not write the DLSS preset to {}", file, e);
+		}
+	}
+
+	private static dev.vitrail.render.dlss.DlssPreset parseDlssPreset(String name) {
+		if (name == null || name.isBlank()) {
+			return dev.vitrail.render.dlss.DlssPreset.DEFAULT;
+		}
+		try {
+			return dev.vitrail.render.dlss.DlssPreset.valueOf(name.trim().toUpperCase(Locale.ROOT));
+		} catch (IllegalArgumentException e) {
+			return dev.vitrail.render.dlss.DlssPreset.DEFAULT;
+		}
+	}
+
+	public static int dlssSharpness() {
+		return RenderScale.dlssSharpness();
+	}
+
+	public static void dlssSharpness(Path gameDirectory, int sharpness) {
+		int clamped = Math.clamp(sharpness, dev.vitrail.settings.PackFile.MIN_DLSS_SHARPNESS, dev.vitrail.settings.PackFile.MAX_DLSS_SHARPNESS);
+		RenderScale.dlssSharpness(clamped);
+		askedFor = askedFor.withDlssSharpness(clamped);
+
+		Path file = packFile(gameDirectory);
+		try {
+			PackFile.write(file, PackFile.read(file).withDlssSharpness(clamped));
+		} catch (IOException | RuntimeException e) {
+			Vitrail.logger().error("Vitrail could not write the DLSS sharpness to {}", file, e);
+		}
 	}
 
 	/**

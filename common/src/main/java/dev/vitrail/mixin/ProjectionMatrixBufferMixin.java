@@ -32,5 +32,12 @@ public class ProjectionMatrixBufferMixin {
 	private void vitrail$capture(Matrix4f projectionMatrix,
 			CallbackInfoReturnable<GpuBufferSlice> callback) {
 		CapturedProjection.capture(projectionMatrix);
+		if (dev.vitrail.render.RenderScale.usingDlss()) {
+			dev.vitrail.render.dlss.DlssJitter.applyJitter(
+					projectionMatrix,
+					dev.vitrail.render.RenderScale.renderWidth(),
+					dev.vitrail.render.RenderScale.renderHeight()
+			);
+		}
 	}
 }

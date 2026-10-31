@@ -2,6 +2,7 @@
 .gradle/
 build/
 */build/
+**/build/
 !gradle/wrapper/gradle-wrapper.jar
 
 # Run directories. ModDevGradle puts the dev client under runs/.
@@ -72,3 +73,8 @@ replay_pid*.log
 
 # glslangValidator drops its SPIR-V next to wherever it was run from.
 *.spv
+
+# Root runtime files and local developer configs
+/config.json
+/nvngx_dlss.dll
+/vitrail_dlss.dll

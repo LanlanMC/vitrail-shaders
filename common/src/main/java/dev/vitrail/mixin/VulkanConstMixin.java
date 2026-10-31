@@ -26,7 +26,7 @@ public abstract class VulkanConstMixin {
 			cancellable = true)
 	private static void vitrail$storageUsage(int usage, GpuFormat format,
 			CallbackInfoReturnable<Integer> info) {
-		if (TextureUsage.storageRequested()) {
+		if (TextureUsage.storageRequested() || dev.vitrail.render.RenderScale.usingDlss()) {
 			info.setReturnValue(info.getReturnValueI() | VK10.VK_IMAGE_USAGE_STORAGE_BIT);
 		}
 	}

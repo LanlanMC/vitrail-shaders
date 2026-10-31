@@ -31,6 +31,7 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.CommandEncoder;
 import com.mojang.blaze3d.systems.GpuDevice;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MappableRingBuffer;
@@ -137,6 +138,14 @@ public final class PackChain {
 		return chain == null || chain.targets == null
 				? null
 				: chain.targets.motionVectors().view();
+	}
+
+	static GpuTexture motionVectorsTexture() {
+		PackChain chain = active;
+
+		return chain == null || chain.targets == null
+				? null
+				: chain.targets.motionVectors().texture();
 	}
 
 	/**
@@ -2315,7 +2324,7 @@ public final class PackChain {
 		// The gate is asked BEFORE anything is built for the call: an encoder made in the argument
 		// list is two allocations a frame for a player who never turns any of this on.
 		MotionVectors vectors = this.targets.motionVectors();
-		if (RenderScale.upscaling() && TemporalAccumulation.wanted()) {
+		if (RenderScale.upscaling() && (TemporalAccumulation.wanted() || RenderScale.usingDlss())) {
 			vectors.draw(device.createCommandEncoder(), device, this.quad,
 					this.targets.depth().opaque(), ready.main().width, ready.main().height,
 					this.values.view(), this.values.world());

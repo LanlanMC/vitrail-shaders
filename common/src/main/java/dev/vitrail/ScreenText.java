@@ -37,6 +37,11 @@ public final class ScreenText {
 	public static final String PAGE_TITLE = "options.vitrail.page_title";
 
 	/**
+	 * The super-resolution page in Sodium's video settings, beside the engine settings page.
+	 */
+	public static final String SUPER_RESOLUTION_TITLE = "options.vitrail.super_resolution_title";
+
+	/**
 	 * The selector for what a startup that ended badly comes back to, its tooltip, and its three
 	 * values.
 	 * <p>
@@ -76,6 +81,13 @@ public final class ScreenText {
 	 */
 	public static final String RENDER_SCALE = "options.vitrail.render_scale";
 	public static final String RENDER_SCALE_TOOLTIP = "options.vitrail.render_scale_tooltip";
+
+	public static final String DLSS_MODE = "options.vitrail.dlss_mode";
+	public static final String DLSS_MODE_TOOLTIP = "options.vitrail.dlss_mode_tooltip";
+	public static final String DLSS_PRESET = "options.vitrail.dlss_preset";
+	public static final String DLSS_PRESET_TOOLTIP = "options.vitrail.dlss_preset_tooltip";
+	public static final String DLSS_SHARPNESS = "options.vitrail.dlss_sharpness";
+	public static final String DLSS_SHARPNESS_TOOLTIP = "options.vitrail.dlss_sharpness_tooltip";
 
 	public static final String TEMPORAL_FOLD = "options.vitrail.temporal_fold";
 	public static final String TEMPORAL_FOLD_TOOLTIP = "options.vitrail.temporal_fold_tooltip";
