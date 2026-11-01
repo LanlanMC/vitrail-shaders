@@ -115,6 +115,9 @@ public final class RenderScale {
 			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "scale/sharpen_fragment");
 	private static final Identifier BLIT_ID =
 			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "scale/blit_fragment");
+	private static final Identifier REACTIVE_ID =
+			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "scale/dlss_reactive_fragment");
+	private static final String REACTIVE_LABEL = "Vitrail DLSS reactive mask";
 
 	private static final String VERTEX = """
 			#version 460 core
@@ -337,6 +340,43 @@ public final class RenderScale {
 			}
 			""";
 
+	private static final String REACTIVE_MASK = """
+			#version 460 core
+
+			uniform sampler2D InSampler;
+
+			in vec2 ofTexCoord;
+
+			layout(location = 0) out vec4 ofFragData0;
+
+			void main() {
+				float d = texture(InSampler, ofTexCoord).r;
+				// Hand check: first-person hand depth in reversed Z is squeezed to [0.4375, 0.5625]
+				bool isHand = (d >= 0.430 && d <= 0.570);
+				if (isHand) {
+					ofFragData0 = vec4(1.0);
+					return;
+				}
+
+				// 1-pixel dilation around hand borders to prevent trailing edge ghosting
+				vec2 texel = 1.0 / vec2(textureSize(InSampler, 0));
+				float dL = texture(InSampler, ofTexCoord + vec2(-texel.x, 0.0)).r;
+				float dR = texture(InSampler, ofTexCoord + vec2(texel.x, 0.0)).r;
+				float dU = texture(InSampler, ofTexCoord + vec2(0.0, -texel.y)).r;
+				float dD = texture(InSampler, ofTexCoord + vec2(0.0, texel.y)).r;
+
+				if ((dL >= 0.430 && dL <= 0.570) ||
+					(dR >= 0.430 && dR <= 0.570) ||
+					(dU >= 0.430 && dU <= 0.570) ||
+					(dD >= 0.430 && dD <= 0.570)) {
+					ofFragData0 = vec4(0.8);
+					return;
+				}
+
+				ofFragData0 = vec4(0.0);
+			}
+			""";
+
 	private static final ShaderSource SOURCE = GraphicsApi.source((id, type) -> {
 		if (type == ShaderType.FRAGMENT) {
 			if (UPSCALE_ID.equals(id)) {
@@ -345,6 +385,10 @@ public final class RenderScale {
 
 			if (SHARPEN_ID.equals(id)) {
 				return SHARPEN;
+			}
+
+			if (REACTIVE_ID.equals(id)) {
+				return REACTIVE_MASK;
 			}
 
 			if (id.getPath().contains("dlss_sharpen_")) {
@@ -419,6 +463,7 @@ public final class RenderScale {
 	private static final Pass EASU = new Pass(UPSCALE_ID);
 	private static final Pass RCAS = new Pass(SHARPEN_ID);
 	private static final Pass BILINEAR = new Pass(BLIT_ID);
+	private static final Pass REACTIVE = new Pass(REACTIVE_ID);
 	private static final Map<Integer, Pass> DLSS_RCAS_PASSES = new ConcurrentHashMap<>();
 
 	private static Pass dlssRcasPass(int percent) {
@@ -508,13 +553,44 @@ public final class RenderScale {
 	private static int lastTargetWidth;
 	private static int lastTargetHeight;
 	private static boolean lastDlssEvaluated;
+	private static boolean dlssFrameGeneration = false;
+	private static boolean lastDlssgEvaluated = false;
+	private static boolean hasPendingInterpolatedFrame = false;
 
 	public static boolean dlssActive() {
 		return dlssActive;
 	}
 
+	public static boolean dlssFrameGeneration() {
+		return dlssFrameGeneration;
+	}
+
+	public static void dlssFrameGeneration(boolean enabled) {
+		dlssFrameGeneration = enabled;
+		dev.vitrail.render.dlss.DlssFramePacing.reset();
+		if (enabled && dev.vitrail.render.reflex.ReflexBridge.mode() == dev.vitrail.render.reflex.ReflexMode.OFF) {
+			dev.vitrail.render.reflex.ReflexBridge.mode(dev.vitrail.render.reflex.ReflexMode.ON);
+		}
+	}
+
 	public static boolean lastDlssEvaluated() {
 		return lastDlssEvaluated;
+	}
+
+	public static boolean lastDlssgEvaluated() {
+		return lastDlssgEvaluated;
+	}
+
+	public static boolean hasPendingInterpolatedFrame() {
+		return hasPendingInterpolatedFrame && dlssActive && interpolatedTarget != null;
+	}
+
+	public static GpuTextureView consumeInterpolatedView() {
+		if (hasPendingInterpolatedFrame && dlssActive && interpolatedTarget != null) {
+			hasPendingInterpolatedFrame = false;
+			return interpolatedTarget.view();
+		}
+		return null;
 	}
 
 	public static int lastRenderWidth() {
@@ -545,6 +621,10 @@ public final class RenderScale {
 		return PackChain.motionVectors() != null;
 	}
 
+	public static boolean isReactiveMaskActive() {
+		return dlssActive && reactiveMaskActive;
+	}
+
 	/** The window-sized set the game allocated, held only while the scaled set stands in for it. */
 	private static GpuTexture fullColor;
 	private static GpuTextureView fullColorView;
@@ -558,6 +638,29 @@ public final class RenderScale {
 
 	/** The window-sized image between the two passes: EASU writes it, RCAS reads it. */
 	private static TargetSurface upscaled;
+
+	/** The low-res reactive mask texture fed to DLSS to eliminate ghosting on dynamic objects (hand). */
+	private static TargetSurface reactiveMask;
+	private static boolean reactiveMaskActive;
+
+	/** The generated interpolated intermediate frame target produced by DLSS-G. */
+	private static TargetSurface interpolatedTarget;
+
+	private static long cachedDepthViewVk = 0L;
+	private static long cachedDepthVk = 0L;
+	private static int cachedDepthFormat = 0;
+	private static long cachedMvViewVk = 0L;
+	private static long cachedMvVk = 0L;
+	private static int cachedMvFormat = 0;
+	private static int cachedTargetWidth = 0;
+	private static int cachedTargetHeight = 0;
+	private static int cachedScaledWidth = 0;
+	private static int cachedScaledHeight = 0;
+	private static float cachedMvScaleX = 1.0f;
+	private static float cachedMvScaleY = 1.0f;
+	private static long cachedHudlessViewVk = 0L;
+	private static long cachedHudlessVk = 0L;
+	private static int cachedHudlessFormat = 0;
 
 	private static GpuBuffer quad;
 
@@ -616,6 +719,7 @@ public final class RenderScale {
 	/** Whether this frame will render a world, told by the head of {@code render}. */
 	public static void frameIntent(boolean rendersWorld) {
 		worldComing = rendersWorld;
+		dev.vitrail.render.dlss.DlssFramePacing.onRenderStart();
 	}
 
 	/**
@@ -679,6 +783,8 @@ public final class RenderScale {
 			lastTargetWidth = 0;
 			lastTargetHeight = 0;
 			lastDlssEvaluated = false;
+			lastDlssgEvaluated = false;
+			hasPendingInterpolatedFrame = false;
 		}
 
 		if ((currentDlss != DlssMode.DLAA && (width >= main.width || height >= main.height))
@@ -731,6 +837,7 @@ public final class RenderScale {
 	 */
 	public static void endWorld(RenderTarget main, CommandEncoder encoder) {
 		if (!swapped || main == null) {
+			lastDlssEvaluated = false;
 			return;
 		}
 
@@ -800,6 +907,7 @@ public final class RenderScale {
 
 	private static boolean dlssEvaluate(CommandEncoder encoder, GpuDevice device, RenderTarget main) {
 		if (!DlssBridge.isInitialized()) {
+			lastDlssEvaluated = false;
 			return false;
 		}
 
@@ -818,10 +926,12 @@ public final class RenderScale {
 
 		long cmdBuffer = DlssVulkanHandles.vkCommandBuffer(encoder);
 		if (cmdBuffer == 0L || inColor == null || outColor == null || inDepth == null) {
+			lastDlssEvaluated = false;
 			return false;
 		}
 
 		if (mvTex == null || mvView == null) {
+			lastDlssEvaluated = false;
 			dlssMissingMvFrames++;
 			if (dlssMissingMvFrames >= 60) {
 				DlssBridge.warnUser("运动矢量持续缺失，DLSS 无法工作 (已回退到基础缩放)");
@@ -868,13 +978,30 @@ public final class RenderScale {
 		float mvScaleX = MV_SCALE_X;
 		float mvScaleY = MV_SCALE_Y;
 
+		long reactiveVk = 0L;
+		long reactiveViewVk = 0L;
+		int reactiveFormat = 0;
+		reactiveMaskActive = false;
+
+		boolean handDrawn = HandDraw.draws();
+		if (handDrawn && reactiveMask != null) {
+			RenderPipeline reactivePipeline = REACTIVE.get(device);
+			if (reactivePipeline != null) {
+				draw(encoder, device, reactivePipeline, inDepthView, reactiveMask.view(), FilterMode.NEAREST, REACTIVE_LABEL);
+				reactiveVk = DlssVulkanHandles.vkImage(reactiveMask.texture());
+				reactiveViewVk = DlssVulkanHandles.vkImageView(reactiveMask.view());
+				reactiveFormat = DlssVulkanHandles.vkFormat(reactiveMask.texture());
+				reactiveMaskActive = true;
+			}
+		}
+
 		boolean evaluated = DlssBridge.evaluate(
 				cmdBuffer,
 				inColorViewVk, inColorVk, inColorFormat,
 				outColorViewVk, outColorVk, outColorFormat,
 				inDepthViewVk, inDepthVk, inDepthFormat,
 				mvViewVk, mvVk, mvFormat,
-				0L, 0L, 0,
+				reactiveViewVk, reactiveVk, reactiveFormat,
 				dev.vitrail.render.dlss.DlssJitter.jitterX(),
 				dev.vitrail.render.dlss.DlssJitter.jitterY(),
 				mvScaleX, mvScaleY,
@@ -882,7 +1009,98 @@ public final class RenderScale {
 				false
 		);
 		lastDlssEvaluated = evaluated;
+
+		if (evaluated) {
+			cachedDepthViewVk = inDepthViewVk;
+			cachedDepthVk = inDepthVk;
+			cachedDepthFormat = inDepthFormat;
+			cachedMvViewVk = mvViewVk;
+			cachedMvVk = mvVk;
+			cachedMvFormat = mvFormat;
+			cachedTargetWidth = main.width;
+			cachedTargetHeight = main.height;
+			cachedScaledWidth = scaled.width;
+			cachedScaledHeight = scaled.height;
+			cachedMvScaleX = mvScaleX;
+			cachedMvScaleY = mvScaleY;
+			cachedHudlessViewVk = outColorViewVk;
+			cachedHudlessVk = outColorVk;
+			cachedHudlessFormat = outColorFormat;
+		} else {
+			lastDlssgEvaluated = false;
+			hasPendingInterpolatedFrame = false;
+		}
+
 		return evaluated;
+	}
+
+	/**
+	 * Evaluates DLSS Frame Generation at swapchain presentation time, after all 2D UI/HUD
+	 * has been drawn onto the real view.
+	 * <p>
+	 * Feeding {@code backbufferView} (world + UI) as DLSSG.Backbuffer and {@code cachedHudless} (world only)
+	 * as DLSSG.HUDLess enables DLSS-G to automatically extract and blend the UI onto the generated
+	 * intermediate frame, completely eliminating UI flickering.
+	 */
+	public static long evaluateDlssgIntoInterp(
+			dev.vitrail.render.dlss.VitrailFramePresenter.PresenterEncoder enc,
+			int targetW,
+			int targetH,
+			long backbufferView,
+			long backbufferImage,
+			int backbufferFormat
+	) {
+		if (!lastDlssEvaluated || !dlssFrameGeneration || !DlssBridge.isFrameGenerationSupported()) {
+			lastDlssgEvaluated = false;
+			return 0L;
+		}
+
+		if (targetW <= 0 || targetH <= 0 || backbufferView == 0L || backbufferImage == 0L) {
+			lastDlssgEvaluated = false;
+			return 0L;
+		}
+
+		if (interpolatedTarget == null) {
+			interpolatedTarget = new TargetSurface("DLSSG_Interpolated", FORMAT, false, true, targetW, targetH);
+		} else if (interpolatedTarget.width() != targetW || interpolatedTarget.height() != targetH) {
+			interpolatedTarget.resize(targetW, targetH);
+		}
+
+		long interpVk = DlssVulkanHandles.vkImage(interpolatedTarget.texture());
+		long interpViewVk = DlssVulkanHandles.vkImageView(interpolatedTarget.storageView());
+		int interpFormat = DlssVulkanHandles.vkFormat(interpolatedTarget.texture());
+
+		org.lwjgl.vulkan.VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
+		long cmdBuffer = cmd.address();
+
+		if (!DlssBridge.isFrameGenerationMatching(targetW, targetH)) {
+			DlssBridge.releaseFrameGenerationFeature();
+			DlssBridge.createFrameGenerationFeature(cmdBuffer, targetW, targetH, false, true, backbufferFormat != 0 ? backbufferFormat : cachedHudlessFormat);
+		}
+
+		boolean ok = DlssBridge.evaluateFrameGeneration(
+				cmdBuffer,
+				backbufferView, backbufferImage, backbufferFormat,
+				cachedHudlessViewVk, cachedHudlessVk, cachedHudlessFormat,
+				interpViewVk, interpVk, interpFormat,
+				cachedDepthViewVk, cachedDepthVk, cachedDepthFormat,
+				cachedMvViewVk, cachedMvVk, cachedMvFormat,
+				targetW, targetH,
+				cachedScaledWidth, cachedScaledHeight,
+				cachedMvScaleX, cachedMvScaleY,
+				false
+		);
+
+		if (org.lwjgl.vulkan.VK10.vkEndCommandBuffer(cmd) != org.lwjgl.vulkan.VK10.VK_SUCCESS) {
+			throw new IllegalStateException("vkEndCommandBuffer(dlssg evaluate) failed");
+		}
+		if (!ok) {
+			lastDlssgEvaluated = false;
+			return 0L;
+		}
+		enc.execute(cmd);
+		lastDlssgEvaluated = true;
+		return interpVk;
 	}
 
 	/**
@@ -932,10 +1150,49 @@ public final class RenderScale {
 		release();
 	}
 
+	public static void invalidateCachedHandles() {
+		lastDlssEvaluated = false;
+		lastDlssgEvaluated = false;
+		hasPendingInterpolatedFrame = false;
+		worldComing = false;
+		dlssActive = false;
+		swapped = false;
+		cachedDepthViewVk = 0L;
+		cachedDepthVk = 0L;
+		cachedDepthFormat = 0;
+		cachedMvViewVk = 0L;
+		cachedMvVk = 0L;
+		cachedMvFormat = 0;
+		cachedHudlessViewVk = 0L;
+		cachedHudlessVk = 0L;
+		cachedHudlessFormat = 0;
+		DlssBridge.releaseFeature();
+		DlssBridge.releaseFrameGenerationFeature();
+	}
+
 	private static void release() {
 		dlssActive = false;
 		lastDlssEvaluated = false;
+		lastDlssgEvaluated = false;
+		hasPendingInterpolatedFrame = false;
 		DlssBridge.releaseFeature();
+		DlssBridge.releaseFrameGenerationFeature();
+		reactiveMaskActive = false;
+		if (reactiveMask != null) {
+			reactiveMask.close();
+			reactiveMask = null;
+		}
+		if (interpolatedTarget != null) {
+			interpolatedTarget.close();
+			interpolatedTarget = null;
+		}
+
+		cachedDepthViewVk = 0L;
+		cachedDepthVk = 0L;
+		cachedMvViewVk = 0L;
+		cachedMvVk = 0L;
+		cachedHudlessViewVk = 0L;
+		cachedHudlessVk = 0L;
 
 		if (scaled != null) {
 			scaled.destroyBuffers();
@@ -1000,6 +1257,14 @@ public final class RenderScale {
 				upscaled = new TargetSurface(UPSCALE_LABEL, FORMAT, false, true, outWidth, outHeight);
 			} else if (upscaled.width() != outWidth || upscaled.height() != outHeight) {
 				upscaled.resize(outWidth, outHeight);
+			}
+
+			if (dlssActive) {
+				if (reactiveMask == null) {
+					reactiveMask = new TargetSurface(REACTIVE_LABEL, FORMAT, false, false, width, height);
+				} else if (reactiveMask.width() != width || reactiveMask.height() != height) {
+					reactiveMask.resize(width, height);
+				}
 			}
 		} catch (GpuDeviceLossException e) {
 			throw e;
@@ -1108,4 +1373,20 @@ public final class RenderScale {
 
 		return quad;
 	}
+
+	public static long cachedDepthVk() { return cachedDepthVk; }
+	public static long cachedDepthViewVk() { return cachedDepthViewVk; }
+	public static int cachedDepthFormat() { return cachedDepthFormat; }
+	public static long cachedMvVk() { return cachedMvVk; }
+	public static long cachedMvViewVk() { return cachedMvViewVk; }
+	public static int cachedMvFormat() { return cachedMvFormat; }
+	public static long cachedHudlessVk() { return cachedHudlessVk; }
+	public static long cachedHudlessViewVk() { return cachedHudlessViewVk; }
+	public static int cachedHudlessFormat() { return cachedHudlessFormat; }
+	public static int cachedTargetWidth() { return cachedTargetWidth; }
+	public static int cachedTargetHeight() { return cachedTargetHeight; }
+	public static int cachedScaledWidth() { return cachedScaledWidth; }
+	public static int cachedScaledHeight() { return cachedScaledHeight; }
+	public static float cachedMvScaleX() { return cachedMvScaleX; }
+	public static float cachedMvScaleY() { return cachedMvScaleY; }
 }

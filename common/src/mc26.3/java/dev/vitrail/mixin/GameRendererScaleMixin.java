@@ -59,9 +59,6 @@ public abstract class GameRendererScaleMixin {
 		RenderScale.recover(mainRenderTarget());
 	}
 
-	private static int debugFrameIntentCount = 0;
-	private static int debugScaleWorldCount = 0;
-
 	/**
 	 * Whether this frame advances the game, which 26.3 hands the extraction that runs before the
 	 * render rather than the render itself. The extraction is the first thing of the frame to see
@@ -73,11 +70,6 @@ public abstract class GameRendererScaleMixin {
 		Minecraft minecraft = Minecraft.getInstance();
 		boolean intent = minecraft.isGameLoadFinished() && advanceGameTime
 				&& minecraft.level != null;
-		if (debugFrameIntentCount < 5) {
-			debugFrameIntentCount++;
-			dev.vitrail.Vitrail.logger().info("GameRendererScaleMixin.frameIntent #{}: finished={}, advance={}, level={}, intent={}",
-					debugFrameIntentCount, minecraft.isGameLoadFinished(), advanceGameTime, minecraft.level != null, intent);
-		}
 		RenderScale.frameIntent(intent);
 	}
 
@@ -89,11 +81,6 @@ public abstract class GameRendererScaleMixin {
 			GpuTexture depth, double clearDepth, Operation<Void> original) {
 		RenderTarget main = mainRenderTarget();
 		boolean begun = RenderScale.beginWorld(main);
-		if (debugScaleWorldCount < 5) {
-			debugScaleWorldCount++;
-			dev.vitrail.Vitrail.logger().info("GameRendererScaleMixin.scaleWorld #{}: main={}, begun={}",
-					debugScaleWorldCount, main, begun);
-		}
 		if (begun) {
 			original.call(encoder, main.getColorTexture(), clearColour, main.getDepthTexture(),
 					clearDepth);

@@ -258,4 +258,10 @@ public abstract class VulkanDeviceMixin implements StalePipelines {
 		this.pipelineCache.putAll(this.vitrail$carriedOver);
 		this.vitrail$carriedOver.clear();
 	}
+
+	@Inject(method = "close", at = @At("HEAD"))
+	private void vitrail$closeReflex(CallbackInfo callback) {
+		dev.vitrail.render.streamline.StreamlineBridge.shutdown();
+		dev.vitrail.render.reflex.ReflexBridge.destroy();
+	}
 }

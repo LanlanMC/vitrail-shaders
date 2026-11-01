@@ -393,6 +393,7 @@ public final class FrameState implements WorldState {
 		this.view.reset();
 		this.shift.reset();
 		FrameSmoothed.forgetAll();
+		CapturedProjection.reset();
 		this.timed = false;
 		this.frameCounter = 0;
 		this.frameTime = 0.0F;

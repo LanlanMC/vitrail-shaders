@@ -10,6 +10,7 @@ import dev.vitrail.render.PackChain;
 import dev.vitrail.render.PackChoice;
 import dev.vitrail.render.pbr.PbrAtlases;
 import dev.vitrail.render.pbr.PbrTextures;
+import dev.vitrail.render.reflex.ReflexBridge;
 import dev.vitrail.render.RenderScale;
 import dev.vitrail.render.ShadowGeometry;
 import dev.vitrail.render.TerrainDraw;
@@ -351,6 +352,9 @@ public final class EngineStages {
 		// The render scale's scaled world and its quad belong to the session too: they outlive
 		// every pack on purpose, so the end of the session is the one caller that frees them.
 		RenderScale.close();
+
+		// Clean up low-latency frame pacing and sync objects while the device is still valid
+		ReflexBridge.destroy();
 
 		// The block atlas sampler a pack's terrain binds, one per anisotropy the player asked for.
 		// Same lifetime and same reason: it belongs to the device rather than to any pack, and a

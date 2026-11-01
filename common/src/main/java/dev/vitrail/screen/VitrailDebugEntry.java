@@ -8,6 +8,8 @@ import dev.vitrail.render.RenderScale;
 import dev.vitrail.render.dlss.DlssBridge;
 import dev.vitrail.render.dlss.DlssJitter;
 import dev.vitrail.render.dlss.DlssMode;
+import dev.vitrail.render.reflex.ReflexBridge;
+import dev.vitrail.render.reflex.ReflexMode;
 import dev.vitrail.settings.PackSession;
 import dev.vitrail.sodium.ShadowTerrain;
 
@@ -84,6 +86,8 @@ public final class VitrailDebugEntry implements DebugScreenEntry {
 		}, () -> displayer.addToGroup(GROUP, PREFIX + undrawnLine()));
 
 		dlssLines(displayer);
+		frameGenerationLines(displayer);
+		reflexLines(displayer);
 	}
 
 	private static void dlssLines(DebugScreenDisplayer displayer) {
@@ -116,21 +120,78 @@ public final class VitrailDebugEntry implements DebugScreenEntry {
 					"%sDLSS Res: %dx%d -> %dx%d (%.1f%%)", PREFIX, rw, rh, tw, th, pct));
 		}
 
-		float jx = DlssJitter.jitterX();
-		float jy = DlssJitter.jitterY();
+		boolean hasMv = RenderScale.hasMotionVectors();
 		int phase = DlssJitter.currentPhase();
 		int phaseCount = DlssJitter.phaseCount();
 		boolean jitterOn = DlssJitter.isJitterEnabled();
+		String jitterStr = jitterOn ? String.format(Locale.ROOT, "Phase %d/%d", phase, phaseCount) : "Off";
 		displayer.addToGroup(GROUP, String.format(Locale.ROOT,
-				"%sDLSS Jitter: (%+.4f, %+.4f) [Phase %d/%d, %s]",
-				PREFIX, jx, jy, phase, phaseCount, jitterOn ? "On" : "Off"));
+				"%sDLSS Motion: %s | Jitter: %s",
+				PREFIX, hasMv ? "Present" : "Missing", jitterStr));
+	}
 
-		boolean hasMv = RenderScale.hasMotionVectors();
-		float mvX = RenderScale.mvScaleX();
-		float mvY = RenderScale.mvScaleY();
+	private static void frameGenerationLines(DebugScreenDisplayer displayer) {
+		boolean fgSupported = DlssBridge.isFrameGenerationSupported() || dev.vitrail.render.streamline.StreamlineBridge.isFgSupported();
+		if (!fgSupported) {
+			if (DlssBridge.isAvailable() || dev.vitrail.render.streamline.StreamlineBridge.usesStreamline()) {
+				displayer.addToGroup(GROUP, PREFIX + "DLSS-G: Unsupported");
+			}
+			return;
+		}
+
+		boolean fgActive = RenderScale.dlssFrameGeneration();
+		String fgStatus = "Off";
+		if (fgActive) {
+			if (dev.vitrail.render.streamline.StreamlineBridge.usesStreamline()) {
+				int baseFps = dev.vitrail.render.dlss.VitrailFramePresenter.INSTANCE.realFps();
+				int dispFps = dev.vitrail.render.dlss.VitrailFramePresenter.INSTANCE.presentedFps();
+				int fgStatusVal = dev.vitrail.render.dlss.VitrailFramePresenter.INSTANCE.lastFgStatus();
+				int actuallyPresented = dev.vitrail.render.dlss.VitrailFramePresenter.INSTANCE.lastActuallyPresented();
+				if (fgStatusVal != 0) {
+					fgStatus = String.format(Locale.ROOT, "Bypassed: %s (Base: %d FPS)",
+							dev.vitrail.render.streamline.StreamlineBridge.decodeFgStatus(fgStatusVal), baseFps);
+				} else if (actuallyPresented == 1 && baseFps > 0) {
+					fgStatus = String.format(Locale.ROOT, "Standby (0 generated frames, Base: %d FPS)", baseFps);
+				} else if (dispFps > 0 && actuallyPresented > 1) {
+					fgStatus = String.format(Locale.ROOT, "Active (Base: %d FPS -> Displayed: %d FPS)", baseFps, dispFps);
+				} else {
+					fgStatus = "Active (Syncing / Pacing...)";
+				}
+			} else if (RenderScale.lastDlssgEvaluated()) {
+				long tickNs = dev.vitrail.render.dlss.DlssFramePacing.smoothedTickNs();
+				float baseFps = tickNs > 0 ? 1_000_000_000.0F / tickNs : 0.0F;
+				fgStatus = String.format(Locale.ROOT, "Active (Base: %.0f FPS -> Displayed: %.0f FPS)", baseFps, baseFps * 2.0F);
+			} else {
+				fgStatus = "Standby";
+			}
+		}
+
+		String version = DlssBridge.getDlssGVersion();
+		String versionTag = (version != null && !version.isBlank()) ? " [" + version + "]" : "";
 		displayer.addToGroup(GROUP, String.format(Locale.ROOT,
-				"%sDLSS Motion: %s (Scale: %.1f, %.1f)",
-				PREFIX, hasMv ? "Present" : "Missing", mvX, mvY));
+				"%sDLSS-G: %s%s", PREFIX, fgStatus, versionTag));
+	}
+
+	private static void reflexLines(DebugScreenDisplayer displayer) {
+		if (!ReflexBridge.isSupported()) {
+			displayer.addToGroup(GROUP, PREFIX + "Reflex: Unsupported");
+			return;
+		}
+
+		ReflexMode mode = ReflexBridge.mode();
+		if (!mode.enabled()) {
+			displayer.addToGroup(GROUP, PREFIX + "Reflex: Off");
+			return;
+		}
+
+		String modeName = mode.name().replace("_PLUS_", " + ");
+		float latency = ReflexBridge.lastLatencyMs();
+		if (latency > 0.0F) {
+			displayer.addToGroup(GROUP, String.format(Locale.ROOT,
+					"%sReflex: %s (Latency: %.1fms)", PREFIX, modeName, latency));
+		} else {
+			displayer.addToGroup(GROUP, PREFIX + "Reflex: " + modeName);
+		}
 	}
 
 	private static String profileLine(PackSession session) {

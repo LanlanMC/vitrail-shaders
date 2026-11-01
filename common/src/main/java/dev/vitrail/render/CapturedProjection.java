@@ -27,8 +27,10 @@ import org.joml.Matrix4fc;
 public final class CapturedProjection {
 
 	private static final Matrix4f CAPTURED = new Matrix4f();
+	private static final Matrix4f LAST_CAPTURED = new Matrix4f();
 
 	private static boolean captured;
+	private static boolean hasLastCaptured;
 	private static boolean warned;
 
 	private CapturedProjection() {
@@ -64,7 +66,9 @@ public final class CapturedProjection {
 		}
 
 		CAPTURED.set(rendered);
+		LAST_CAPTURED.set(rendered);
 		captured = true;
+		hasLastCaptured = true;
 	}
 
 	/**
@@ -94,8 +98,17 @@ public final class CapturedProjection {
 				+ matrix.m23() * matrix.m23() > 0.25F;
 	}
 
+	public static Matrix4fc current() {
+		return hasLastCaptured ? LAST_CAPTURED : (captured ? CAPTURED : null);
+	}
+
 	/** Forgets the capture, so that a frame nothing captured falls back rather than repeating. */
 	public static void clear() {
 		captured = false;
+	}
+
+	public static void reset() {
+		captured = false;
+		hasLastCaptured = false;
 	}
 }

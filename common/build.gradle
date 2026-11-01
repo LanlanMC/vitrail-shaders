@@ -166,6 +166,30 @@ def buildNativeDlss = tasks.register("buildNativeDlss") {
 		} else {
 			throw new GradleException("buildNativeDlss failed: ${releaseDll} not found")
 		}
+
+		// 3. If DLSS Swapper dlss_g is found on the local machine, bundle latest nvngx_dlssg.dll
+		def localAppData = System.getenv("LOCALAPPDATA") ?: "${System.getProperty('user.home')}/AppData/Local"
+		def swapperGDir = new File(localAppData, "DLSS Swapper/dlls/dlss_g")
+		if (swapperGDir.exists() && swapperGDir.isDirectory()) {
+			def versions = swapperGDir.listFiles().findAll { it.isDirectory() }.sort { it.name }.reverse()
+			for (verDir in versions) {
+				def dlssgDll = new File(verDir, "nvngx_dlssg.dll")
+				if (dlssgDll.exists()) {
+					project.copy {
+						from dlssgDll
+						into targetDir
+					}
+					def resDir = new File(projectDir, "src/main/resources/natives/windows/x86_64")
+					resDir.mkdirs()
+					project.copy {
+						from dlssgDll
+						into resDir
+					}
+					println "Bundled nvngx_dlssg.dll from DLSS Swapper (${verDir.name})"
+					break
+				}
+			}
+		}
 	}
 }
 

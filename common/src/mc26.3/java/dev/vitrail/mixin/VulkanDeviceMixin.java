@@ -34,4 +34,10 @@ public abstract class VulkanDeviceMixin {
 	private void vitrail$flushBeforeBufferUpload(CallbackInfoReturnable<GpuBuffer> callback) {
 		GeometryHold.flushIdle(() -> "initial buffer upload");
 	}
+
+	@Inject(method = "close", at = @At("HEAD"))
+	private void vitrail$closeReflex(org.spongepowered.asm.mixin.injection.callback.CallbackInfo callback) {
+		dev.vitrail.render.streamline.StreamlineBridge.shutdown();
+		dev.vitrail.render.reflex.ReflexBridge.destroy();
+	}
 }

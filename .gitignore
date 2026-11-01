@@ -78,3 +78,8 @@ replay_pid*.log
 /config.json
 /nvngx_dlss.dll
 /vitrail_dlss.dll
+**/nvngx_dlssg.dll
+
+# Native build logs and temporary diagnostics
+vitrail_dlss_native.log
+

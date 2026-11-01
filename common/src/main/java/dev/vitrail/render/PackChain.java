@@ -161,6 +161,8 @@ public final class PackChain {
 		active = chain;
 	}
 
+	private static volatile boolean inWorld = false;
+
 	/**
 	 * Takes the chain down for a reload: nothing is drawn until the next load puts one up, and a
 	 * stop found on the old chain does not carry to the new one.
@@ -171,6 +173,7 @@ public final class PackChain {
 		PackChain previous = active;
 		active = null;
 		disabled = false;
+		inWorld = false;
 
 		return previous;
 	}
@@ -664,13 +667,17 @@ public final class PackChain {
 	}
 
 	/**
-	 * Whether a pack is loaded and still drawable.
+	 * Whether a pack is loaded and currently drawing in an active world.
 	 * <p>
 	 * Iris asks its config; this engine asks the chain. Same question: is a pack drawing, so the
 	 * game's own improved-transparency path must stay off.
 	 */
 	public static boolean drawingPack() {
-		return active != null && !disabled;
+		if (active == null || disabled || !inWorld) {
+			return false;
+		}
+		Minecraft mc = Minecraft.getInstance();
+		return mc != null && mc.level != null;
 	}
 
 	/**
@@ -760,6 +767,7 @@ public final class PackChain {
 			return false;
 		}
 
+		inWorld = true;
 		sayBeforeLevelRoad();
 
 		return RELOAD_BEFORE_LEVEL
@@ -1272,10 +1280,11 @@ public final class PackChain {
 
 	/** Called when the client shuts down, while the device is still alive. */
 	public static void close() {
-		// Taken down before it is released, and not merely released: after this nothing draws again,
-		// so a chain still answering as the live one would have the release announce that the next
-		// device purge carries its pipelines, when the next purge is the one inside the device's own
-		// close and that one carries nothing at all.
+		inWorld = false;
+		dev.vitrail.render.dlss.VitrailFramePresenter.INSTANCE.onLeaveWorld();
+		RenderScale.invalidateCachedHandles();
+		GraphicsApi.waitDeviceIdle();
+
 		PackChain chain = takeDown();
 		if (chain != null) {
 			chain.release();
@@ -1315,10 +1324,15 @@ public final class PackChain {
 	 * appears on pays once.
 	 */
 	public static void leaveWorld() {
+		inWorld = false;
 		PackChain chain = active;
 		if (chain == null) {
 			return;
 		}
+
+		dev.vitrail.render.dlss.VitrailFramePresenter.INSTANCE.onLeaveWorld();
+		RenderScale.invalidateCachedHandles();
+		GraphicsApi.waitDeviceIdle();
 
 		try {
 			// The line is about what goes back, so it has to be able to say that nothing does. A

@@ -12,6 +12,8 @@ import dev.vitrail.render.TerrainDraw;
 import dev.vitrail.render.dlss.DlssBridge;
 import dev.vitrail.render.dlss.DlssMode;
 import dev.vitrail.render.dlss.DlssPreset;
+import dev.vitrail.render.reflex.ReflexBridge;
+import dev.vitrail.render.reflex.ReflexMode;
 import dev.vitrail.screen.CompileCard;
 import dev.vitrail.screen.PackScreens;
 import dev.vitrail.ScreenText;
@@ -100,6 +102,14 @@ public final class ConfigEntry implements ConfigEntryPoint {
 	private static final Identifier DLSS_SHARPNESS =
 			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "dlss_sharpness");
 
+	/** The NVIDIA Reflex low-latency mode. */
+	private static final Identifier REFLEX_MODE =
+			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "reflex_mode");
+
+	/** Whether DLSS Frame Generation (DLSS-G) is enabled. */
+	private static final Identifier DLSS_FRAME_GENERATION =
+			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "dlss_frame_generation");
+
 	/** The fraction of the shadow map the pack asked for that is drawn, beside both. */
 	private static final Identifier SHADOW_MAP_SCALE =
 			Identifier.fromNamespaceAndPath(Vitrail.MOD_ID, "shadow_map_scale");
@@ -163,6 +173,8 @@ public final class ConfigEntry implements ConfigEntryPoint {
 							.addOption(dlssMode(builder))
 							.addOption(dlssPreset(builder))
 							.addOption(dlssSharpness(builder))
+							.addOption(dlssFrameGeneration(builder))
+							.addOption(reflexMode(builder))
 							.addOption(temporalFold(builder))));
 		}
 
@@ -286,6 +298,47 @@ public final class ConfigEntry implements ConfigEntryPoint {
 				.setEnabledProvider(state -> state.readEnumOption(DLSS_MODE, DlssMode.class) != DlssMode.OFF
 						&& DlssBridge.isAvailable(), DLSS_MODE)
 				.setValueFormatter(sharpness -> Component.literal(sharpness + "%"))
+				.setStorageHandler(() -> {})
+				.setImpact(OptionImpact.LOW);
+	}
+
+	/**
+	 * NVIDIA DLSS 3 Frame Generation.
+	 * <p>
+	 * Generates intermediate frames using Ada Lovelace Optical Flow Accelerator.
+	 * Requires an RTX 40 series GPU and automatically enables NVIDIA Reflex.
+	 */
+	private static OptionBuilder dlssFrameGeneration(ConfigBuilder builder) {
+		return builder.createBooleanOption(DLSS_FRAME_GENERATION)
+				.setName(Component.translatable(ScreenText.DLSS_FRAME_GENERATION))
+				.setTooltip(_ -> Component.translatable(ScreenText.DLSS_FRAME_GENERATION_TOOLTIP))
+				.setDefaultValue(PackFile.DEFAULT_DLSS_FRAME_GENERATION)
+				.setBinding(enabled -> {
+					PackChoice.dlssFrameGeneration(Vitrail.platform().gameDirectory(), enabled);
+					if (enabled && PackChoice.reflexMode() == ReflexMode.OFF) {
+						PackChoice.reflexMode(Vitrail.platform().gameDirectory(), ReflexMode.ON);
+					}
+				}, PackChoice::dlssFrameGeneration)
+				.setEnabledProvider(state -> state.readEnumOption(DLSS_MODE, DlssMode.class) != DlssMode.OFF
+						&& DlssBridge.isFrameGenerationSupported(), DLSS_MODE)
+				.setStorageHandler(() -> {})
+				.setImpact(OptionImpact.HIGH);
+	}
+
+	/**
+	 * NVIDIA Reflex 2 low latency frame pacing.
+	 * <p>
+	 * Reduces system latency in GPU-bound scenarios by aligning CPU frame pacing with GPU presentation.
+	 */
+	private static OptionBuilder reflexMode(ConfigBuilder builder) {
+		return builder.createEnumOption(REFLEX_MODE, ReflexMode.class)
+				.setName(Component.translatable(ScreenText.REFLEX_MODE))
+				.setTooltip(_ -> Component.translatable(ScreenText.REFLEX_MODE_TOOLTIP))
+				.setDefaultValue(ReflexMode.OFF)
+				.setBinding(mode -> PackChoice.reflexMode(Vitrail.platform().gameDirectory(), mode),
+						PackChoice::reflexMode)
+				.setElementNameProvider(mode -> Component.translatable(mode.translationKey()))
+				.setEnabledProvider(state -> ReflexBridge.isSupported())
 				.setStorageHandler(() -> {})
 				.setImpact(OptionImpact.LOW);
 	}

@@ -42,6 +42,7 @@ typedef enum NVSDK_NGX_Feature {
     NVSDK_NGX_Feature_ImageSignalProcessing = 6,
     NVSDK_NGX_Feature_DeepResolve = 7,
     NVSDK_NGX_Feature_RayReconstruction = 8,
+    NVSDK_NGX_Feature_FrameGeneration = 11,
     NVSDK_NGX_Feature_NumFeatures
 } NVSDK_NGX_Feature;
 
@@ -133,6 +134,7 @@ typedef void (NVSDK_CONV *PFN_NVSDK_NGX_ProgressCallback)(float InProgress, int 
 #define NVSDK_NGX_Parameter_MV_Scale_X "MV.Scale.X"
 #define NVSDK_NGX_Parameter_MV_Scale_Y "MV.Scale.Y"
 #define NVSDK_NGX_Parameter_TransparencyMask "TransparencyMask"
+#define NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask "DLSS.Input.Bias.Current.Color.Mask"
 #define NVSDK_NGX_Parameter_ExposureTexture "ExposureTexture"
 #define NVSDK_NGX_Parameter_SuperSampling_FeatureInitResult "SuperSampling.FeatureInitResult"
 #define NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA "DLSS.Hint.Render.Preset.DLAA"
@@ -141,6 +143,48 @@ typedef void (NVSDK_CONV *PFN_NVSDK_NGX_ProgressCallback)(float InProgress, int 
 #define NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance "DLSS.Hint.Render.Preset.Performance"
 #define NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance "DLSS.Hint.Render.Preset.UltraPerformance"
 #define NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality "DLSS.Hint.Render.Preset.UltraQuality"
+
+// DLSS-G Frame Generation Parameter keys
+#define NVSDK_NGX_Parameter_FrameGeneration_Available "FrameGeneration.Available"
+#define NVSDK_NGX_Parameter_FrameGeneration_FeatureInitResult "FrameGeneration.FeatureInitResult"
+#define NVSDK_NGX_Parameter_DLSSG_MultiFrameCount "DLSSG.MultiFrameCount"
+#define NVSDK_NGX_Parameter_DLSSG_MultiFrameCountMax "DLSSG.MultiFrameCountMax"
+#define NVSDK_NGX_Parameter_DLSSG_MultiFrameIndex "DLSSG.MultiFrameIndex"
+#define NVSDK_NGX_Parameter_DLSSG_Backbuffer "DLSSG.Backbuffer"
+#define NVSDK_NGX_Parameter_DLSSG_OutputInterpolated "DLSSG.OutputInterpolated"
+#define NVSDK_NGX_Parameter_DLSSG_OutputReal "DLSSG.OutputReal"
+#define NVSDK_NGX_Parameter_DLSSG_Depth "DLSSG.Depth"
+#define NVSDK_NGX_Parameter_DLSSG_MVecs "DLSSG.MVecs"
+#define NVSDK_NGX_Parameter_DLSSG_Width "DLSSG.Width"
+#define NVSDK_NGX_Parameter_DLSSG_Height "DLSSG.Height"
+#define NVSDK_NGX_Parameter_DLSSG_DepthInverted "DLSSG.DepthInverted"
+#define NVSDK_NGX_Parameter_DLSSG_ColorBuffersHDR "DLSSG.ColorBuffersHDR"
+#define NVSDK_NGX_Parameter_DLSSG_Dynamic_ReflexDriven "DLSSG.Dynamic.ReflexDriven"
+#define NVSDK_NGX_Parameter_DLSSG_Reset "DLSSG.Reset"
+#define NVSDK_NGX_Parameter_DLSSG_MvecScaleX "DLSSG.MvecScaleX"
+#define NVSDK_NGX_Parameter_DLSSG_MvecScaleY "DLSSG.MvecScaleY"
+#define NVSDK_NGX_Parameter_DLSSG_BackbufferFrameID "DLSSG.BackbufferFrameID"
+#define NVSDK_NGX_Parameter_DLSSG_BackbufferFormat "DLSSG.BackbufferFormat"
+#define NVSDK_NGX_DLSSG_Parameter_UserInterfaceRecompositionEnabled "DLSSG.UserInterfaceRecompositionEnabled"
+#define NVSDK_NGX_Parameter_DLSSG_HUDLess "DLSSG.HUDLess"
+#define NVSDK_NGX_Parameter_DLSSG_UI "DLSSG.UI"
+
+typedef struct NVSDK_NGX_PathListInfo {
+    wchar_t const* const* Path;
+    unsigned int Length;
+} NVSDK_NGX_PathListInfo;
+
+typedef struct NVSDK_NGX_LoggingInfo {
+    void* LoggingCallback;
+    int MinimumLoggingLevel;
+    bool DisableOtherLoggingSinks;
+} NVSDK_NGX_LoggingInfo;
+
+typedef struct NVSDK_NGX_FeatureCommonInfo {
+    NVSDK_NGX_PathListInfo PathListInfo;
+    void* InternalData;
+    NVSDK_NGX_LoggingInfo LoggingInfo;
+} NVSDK_NGX_FeatureCommonInfo;
 
 struct ID3D11Resource;
 struct ID3D12Resource;

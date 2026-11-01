@@ -16,6 +16,8 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -40,12 +42,27 @@ public final class DlssBridge {
 	private static DlssPreset currentPreset = DlssPreset.DEFAULT;
 	private static int evalFailureCount = 0;
 
+	// DLSS Frame Generation (DLSS-G) state
+	private static boolean frameGenerationSupported = false;
+	private static boolean frameGenerationCreated = false;
+	private static int currentDlssgWidth = 0;
+	private static int currentDlssgHeight = 0;
+	private static int dlssgEvalFailureCount = 0;
+	private static Path swapperDlssGPath = null;
+	private static String dlssGVersion = null;
+
 	private static MethodHandle fnIsSupported;
 	private static MethodHandle fnInit;
+	private static MethodHandle fnInitV2;
 	private static MethodHandle fnGetOptimalSettings;
 	private static MethodHandle fnCreateFeature;
 	private static MethodHandle fnEvaluate;
 	private static MethodHandle fnReleaseFeature;
+	private static MethodHandle fnDlssgIsSupported;
+	private static MethodHandle fnDlssgCreateFeature;
+	private static MethodHandle fnDlssgEvaluate;
+	private static MethodHandle fnDlssgEvaluateV2;
+	private static MethodHandle fnDlssgReleaseFeature;
 	private static MethodHandle fnShutdown;
 
 	static {
@@ -70,6 +87,9 @@ public final class DlssBridge {
 			fnInit = downcall(linker, lookup, "vitrail_dlss_init",
 					FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
 							ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+			fnInitV2 = downcall(linker, lookup, "vitrail_dlss_init_v2",
+					FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
+							ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 			fnGetOptimalSettings = downcall(linker, lookup, "vitrail_dlss_get_optimal_settings",
 					FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
 							ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
@@ -89,8 +109,41 @@ public final class DlssBridge {
 							ValueLayout.JAVA_INT));
 			fnReleaseFeature = downcall(linker, lookup, "vitrail_dlss_release_feature",
 					FunctionDescriptor.ofVoid());
+			fnDlssgIsSupported = downcall(linker, lookup, "vitrail_dlssg_is_supported",
+					FunctionDescriptor.of(ValueLayout.JAVA_INT));
+			fnDlssgCreateFeature = downcall(linker, lookup, "vitrail_dlssg_create_feature",
+					FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
+							ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+			fnDlssgEvaluate = downcall(linker, lookup, "vitrail_dlssg_evaluate",
+					FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+							ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+							ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+							ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+							ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+							ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+							ValueLayout.JAVA_INT));
+			fnDlssgEvaluateV2 = downcall(linker, lookup, "vitrail_dlssg_evaluate_v2",
+					FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+							ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+							ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+							ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+							ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+							ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
+							ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+							ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+							ValueLayout.JAVA_INT));
+			fnDlssgReleaseFeature = downcall(linker, lookup, "vitrail_dlssg_release_feature",
+					FunctionDescriptor.ofVoid());
 			fnShutdown = downcall(linker, lookup, "vitrail_dlss_shutdown",
 					FunctionDescriptor.ofVoid());
+
+			discoverDlssGFromSwapper();
+
+			if (fnDlssgIsSupported != null) {
+				Vitrail.logger().info("DLSS bridge DLSS-G symbols resolved successfully");
+			} else {
+				Vitrail.logger().warn("DLSS bridge DLL loaded, but DLSS-G symbols not found (DLL might be outdated)");
+			}
 
 			int supported = (int) fnIsSupported.invokeExact();
 			available = (supported != 0);
@@ -106,20 +159,42 @@ public final class DlssBridge {
 		}
 	}
 
-	private static SymbolLookup findSymbolLookup() {
-		// 1. Try loading directly from working directory or relative build path
-		Path[] searchPaths = new Path[] {
-				Path.of(DLL_NAME),
-				Path.of("mods", DLL_NAME),
-				Path.of("native/dlss/build/Release", DLL_NAME),
-				Vitrail.platform().gameDirectory().resolve(DLL_NAME),
-				Vitrail.platform().gameDirectory().resolve("mods").resolve(DLL_NAME)
-		};
+	private static void trySyncDevDll(Path sourceDll) {
+		try {
+			Path targetDir = Vitrail.platform().gameDirectory().resolve(".vitrail-natives");
+			Files.createDirectories(targetDir);
+			Path target = targetDir.resolve(DLL_NAME);
+			if (!Files.exists(target) || Files.size(target) != Files.size(sourceDll)) {
+				Files.copy(sourceDll, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+			}
+		} catch (Exception ignored) {
+		}
+		try {
+			Path runDll = Vitrail.platform().gameDirectory().resolve(DLL_NAME);
+			if (!Files.exists(runDll) || Files.size(runDll) != Files.size(sourceDll)) {
+				Files.copy(sourceDll, runDll, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+			}
+		} catch (Exception ignored) {
+		}
+	}
 
-		for (Path p : searchPaths) {
-			if (Files.exists(p)) {
+	private static SymbolLookup findSymbolLookup() {
+		// 1. Check local build output from CMake build directory (development mode)
+		List<Path> devSearchPaths = List.of(
+				Path.of("native/dlss/build/Release", DLL_NAME),
+				Path.of("../../native/dlss/build/Release", DLL_NAME),
+				Path.of("../native/dlss/build/Release", DLL_NAME),
+				Vitrail.platform().gameDirectory().resolve("../../native/dlss/build/Release").resolve(DLL_NAME).normalize()
+		);
+		for (Path devBuildDll : devSearchPaths) {
+			if (Files.isRegularFile(devBuildDll)) {
 				try {
-					return SymbolLookup.libraryLookup(p.toAbsolutePath(), Arena.global());
+					SymbolLookup lookup = SymbolLookup.libraryLookup(devBuildDll.toAbsolutePath(), Arena.global());
+					if (lookup.find("vitrail_dlssg_is_supported").isPresent()) {
+						Vitrail.logger().info("Loaded DLSS native bridge DLL from CMake build: {}", devBuildDll.toAbsolutePath());
+						trySyncDevDll(devBuildDll);
+						return lookup;
+					}
 				} catch (Exception ignored) {
 				}
 			}
@@ -133,14 +208,43 @@ public final class DlssBridge {
 					Path extractDir = Vitrail.platform().gameDirectory().resolve(".vitrail-natives");
 					Files.createDirectories(extractDir);
 					Path extracted = extractDir.resolve(DLL_NAME);
-					Files.copy(in, extracted, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-					return SymbolLookup.libraryLookup(extracted.toAbsolutePath(), Arena.global());
+					byte[] resBytes = in.readAllBytes();
+					if (!Files.exists(extracted) || Files.size(extracted) != resBytes.length) {
+						Files.write(extracted, resBytes);
+					}
+					SymbolLookup lookup = SymbolLookup.libraryLookup(extracted.toAbsolutePath(), Arena.global());
+					if (lookup.find("vitrail_dlssg_is_supported").isPresent()) {
+						Vitrail.logger().info("Loaded DLSS native bridge DLL from extracted resources: {}", extracted.toAbsolutePath());
+						return lookup;
+					}
 				}
 			}
 		} catch (Exception ignored) {
 		}
 
-		// 3. Try loading from system loader
+		// 3. Fallback: check working directory or game directory
+		Path[] searchPaths = new Path[] {
+				Vitrail.platform().gameDirectory().resolve(DLL_NAME),
+				Vitrail.platform().gameDirectory().resolve(".vitrail-natives").resolve(DLL_NAME),
+				Vitrail.platform().gameDirectory().resolve("mods").resolve(DLL_NAME),
+				Path.of(DLL_NAME),
+				Path.of("mods", DLL_NAME)
+		};
+
+		for (Path p : searchPaths) {
+			if (Files.isRegularFile(p)) {
+				try {
+					SymbolLookup lookup = SymbolLookup.libraryLookup(p.toAbsolutePath(), Arena.global());
+					if (lookup.find("vitrail_dlssg_is_supported").isPresent()) {
+						Vitrail.logger().info("Loaded DLSS native bridge DLL from fallback path: {}", p.toAbsolutePath());
+						return lookup;
+					}
+				} catch (Exception ignored) {
+				}
+			}
+		}
+
+		// 4. Try loading from system loader
 		try {
 			return SymbolLookup.loaderLookup();
 		} catch (Exception ignored) {
@@ -216,11 +320,29 @@ public final class DlssBridge {
 			MemorySegment pdSeg = MemorySegment.ofAddress(vkPhysical);
 			MemorySegment instSeg = MemorySegment.ofAddress(vkInstance);
 
-			int res = (int) fnInit.invokeExact(0x2602L, pathSeg, instSeg, pdSeg, devSeg);
+			int res;
+			if (fnInitV2 != null) {
+				Path dlssGDll = discoverDlssGFromSwapper();
+				String dlssGPathStr = dlssGDll != null ? dlssGDll.toAbsolutePath().toString() : "";
+				MemorySegment dlssGSeg = arena.allocateFrom(dlssGPathStr, java.nio.charset.StandardCharsets.UTF_16LE);
+				res = (int) fnInitV2.invokeExact(0x2602L, pathSeg, instSeg, pdSeg, devSeg, dlssGSeg);
+			} else {
+				res = (int) fnInit.invokeExact(0x2602L, pathSeg, instSeg, pdSeg, devSeg);
+			}
+
 			if (res == 0 || res == 1) {
 				initialized = true;
 				initFailed = false;
 				Vitrail.logger().info("NVIDIA NGX Vulkan initialized successfully for Vitrail");
+
+				if (fnDlssgIsSupported != null) {
+					try {
+						frameGenerationSupported = ((int) fnDlssgIsSupported.invokeExact()) != 0;
+						Vitrail.logger().info("NVIDIA DLSS Frame Generation support detected: {}", frameGenerationSupported);
+					} catch (Throwable t) {
+						Vitrail.logger().debug("Failed to query DLSS-G support: {}", t.getMessage());
+					}
+				}
 				return true;
 			} else {
 				Vitrail.logger().warn("NVIDIA NGX Vulkan init returned error code {}", res);
@@ -387,8 +509,265 @@ public final class DlssBridge {
 		}
 	}
 
+	public static boolean isFrameGenerationSupported() {
+		if (!available) return false;
+		if (initialized) {
+			return frameGenerationSupported;
+		}
+		// Before Vulkan NGX initialization (e.g. title screen / settings menu),
+		// allow toggling if DLSS bridge exports DLSS-G symbols and nvngx_dlssg.dll is available.
+		return fnDlssgIsSupported != null && (discoverDlssGFromSwapper() != null || swapperDlssGPath != null);
+	}
+
+	public static boolean isFrameGenerationCreated() {
+		return frameGenerationCreated;
+	}
+
+	public static boolean isFrameGenerationMatching(int targetW, int targetH) {
+		return frameGenerationCreated && currentDlssgWidth == targetW && currentDlssgHeight == targetH;
+	}
+
+	public static String getDlssGVersion() {
+		if (dlssGVersion == null) {
+			return "v3.x";
+		}
+		var m = java.util.regex.Pattern.compile("v\\d+(\\.\\d+)+").matcher(dlssGVersion);
+		if (m.find()) {
+			return m.group();
+		}
+		return dlssGVersion;
+	}
+
+	public static Path swapperDlssGPath() {
+		return swapperDlssGPath;
+	}
+
+	public static Path discoverDlssGFromSwapper() {
+		if (swapperDlssGPath != null && Files.exists(swapperDlssGPath)) {
+			return swapperDlssGPath;
+		}
+
+		String localAppData = System.getenv("LOCALAPPDATA");
+		if (localAppData == null || localAppData.isBlank()) {
+			String userHome = System.getProperty("user.home");
+			localAppData = userHome != null ? userHome + "\\AppData\\Local" : null;
+		}
+
+		if (localAppData != null) {
+			Path swapperDir = Path.of(localAppData, "DLSS Swapper", "dlls", "dlss_g");
+			if (Files.isDirectory(swapperDir)) {
+				try (var stream = Files.list(swapperDir)) {
+					List<Path> dirs = stream
+							.filter(Files::isDirectory)
+							.sorted(Comparator.comparing((Path p) -> p.getFileName().toString()).reversed())
+							.toList();
+					for (Path d : dirs) {
+						Path dll = d.resolve("nvngx_dlssg.dll");
+						if (Files.isRegularFile(dll)) {
+							swapperDlssGPath = dll;
+							dlssGVersion = d.getFileName().toString();
+							Vitrail.logger().info("Found DLSS Frame Generation library in DLSS Swapper: {} ({})", dll, dlssGVersion);
+							trySyncToRuntime(dll);
+							return dll;
+						}
+					}
+				} catch (Exception e) {
+					Vitrail.logger().debug("Error scanning DLSS Swapper directory: {}", e.getMessage());
+				}
+			}
+		}
+
+		// Fallback: check .vitrail-natives or game directory
+		Path localNatives = Vitrail.platform().gameDirectory().resolve(".vitrail-natives").resolve("nvngx_dlssg.dll");
+		if (Files.isRegularFile(localNatives)) {
+			swapperDlssGPath = localNatives;
+			return localNatives;
+		}
+		Path workDirDll = Path.of("nvngx_dlssg.dll");
+		if (Files.isRegularFile(workDirDll)) {
+			swapperDlssGPath = workDirDll.toAbsolutePath();
+			return swapperDlssGPath;
+		}
+
+		// Fallback: extract from jar resources
+		try {
+			String resPath = "/natives/windows/x86_64/nvngx_dlssg.dll";
+			try (var in = DlssBridge.class.getResourceAsStream(resPath)) {
+				if (in != null) {
+					Path nativesDir = Vitrail.platform().gameDirectory().resolve(".vitrail-natives");
+					Files.createDirectories(nativesDir);
+					Path targetDll = nativesDir.resolve("nvngx_dlssg.dll");
+					if (!Files.exists(targetDll)) {
+						Files.copy(in, targetDll, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+					}
+					if (Files.isRegularFile(targetDll)) {
+						swapperDlssGPath = targetDll;
+						dlssGVersion = "Bundled DLSS-G";
+						return targetDll;
+					}
+				}
+			}
+		} catch (Exception ignored) {
+		}
+
+		return null;
+	}
+
+	private static void trySyncToRuntime(Path sourceDll) {
+		try {
+			Path nativesDir = Vitrail.platform().gameDirectory().resolve(".vitrail-natives");
+			Files.createDirectories(nativesDir);
+			Path targetDll = nativesDir.resolve("nvngx_dlssg.dll");
+			if (!Files.exists(targetDll) || Files.size(targetDll) != Files.size(sourceDll)) {
+				Files.copy(sourceDll, targetDll, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+			}
+			Path workDirDll = Path.of("nvngx_dlssg.dll");
+			if (!Files.exists(workDirDll) || Files.size(workDirDll) != Files.size(sourceDll)) {
+				Files.copy(sourceDll, workDirDll, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+			}
+		} catch (Exception ignored) {
+		}
+	}
+
+	public static boolean createFrameGenerationFeature(long cmdBuffer, int width, int height, boolean isHdr, boolean depthInverted, int backbufferFormat) {
+		if (!available || !initialized || fnDlssgCreateFeature == null) return false;
+
+		try {
+			MemorySegment cmdSeg = MemorySegment.ofAddress(cmdBuffer);
+			int res = (int) fnDlssgCreateFeature.invokeExact(
+					cmdSeg, width, height,
+					isHdr ? 1 : 0,
+					depthInverted ? 1 : 0,
+					backbufferFormat
+			);
+
+			if (res == 0 || res == 1) {
+				frameGenerationCreated = true;
+				currentDlssgWidth = width;
+				currentDlssgHeight = height;
+				dlssgEvalFailureCount = 0;
+				Vitrail.logger().info("NVIDIA DLSS Frame Generation feature created ({}x{})", width, height);
+				return true;
+			} else {
+				Vitrail.logger().warn("DLSS Frame Generation createFeature failed (code: 0x{})", Integer.toHexString(res));
+				frameGenerationCreated = false;
+				return false;
+			}
+		} catch (Throwable t) {
+			Vitrail.logger().error("Exception during DLSS-G createFeature", t);
+			frameGenerationCreated = false;
+			return false;
+		}
+	}
+
+	public static boolean evaluateFrameGeneration(
+			long cmdBuffer,
+			long inColorView, long inColorImage, int inColorFormat,
+			long inHudlessView, long inHudlessImage, int inHudlessFormat,
+			long outInterpolatedView, long outInterpolatedImage, int outInterpolatedFormat,
+			long inDepthView, long inDepthImage, int inDepthFormat,
+			long inMvView, long inMvImage, int inMvFormat,
+			int targetWidth, int targetHeight,
+			int mvecWidth, int mvecHeight,
+			float mvScaleX, float mvScaleY,
+			boolean resetAccumulation
+	) {
+		if (!available || !initialized || !frameGenerationCreated) {
+			return false;
+		}
+
+		try {
+			MemorySegment cmdSeg = MemorySegment.ofAddress(cmdBuffer);
+			MemorySegment inColorViewSeg = MemorySegment.ofAddress(inColorView);
+			MemorySegment outInterpolatedViewSeg = MemorySegment.ofAddress(outInterpolatedView);
+			MemorySegment inDepthViewSeg = MemorySegment.ofAddress(inDepthView);
+			MemorySegment inMvViewSeg = inMvView == 0L ? MemorySegment.NULL : MemorySegment.ofAddress(inMvView);
+
+			int res;
+			if (fnDlssgEvaluateV2 != null && inHudlessView != 0L && inHudlessImage != 0L) {
+				MemorySegment inHudlessViewSeg = MemorySegment.ofAddress(inHudlessView);
+				res = (int) fnDlssgEvaluateV2.invokeExact(
+						cmdSeg,
+						inColorViewSeg, inColorImage, inColorFormat,
+						inHudlessViewSeg, inHudlessImage, inHudlessFormat,
+						outInterpolatedViewSeg, outInterpolatedImage, outInterpolatedFormat,
+						inDepthViewSeg, inDepthImage, inDepthFormat,
+						inMvViewSeg, inMvImage, inMvFormat,
+						targetWidth, targetHeight,
+						mvecWidth, mvecHeight,
+						mvScaleX, mvScaleY,
+						resetAccumulation ? 1 : 0
+				);
+			} else if (fnDlssgEvaluate != null) {
+				res = (int) fnDlssgEvaluate.invokeExact(
+						cmdSeg,
+						inColorViewSeg, inColorImage, inColorFormat,
+						outInterpolatedViewSeg, outInterpolatedImage, outInterpolatedFormat,
+						inDepthViewSeg, inDepthImage, inDepthFormat,
+						inMvViewSeg, inMvImage, inMvFormat,
+						targetWidth, targetHeight,
+						mvecWidth, mvecHeight,
+						mvScaleX, mvScaleY,
+						resetAccumulation ? 1 : 0
+				);
+			} else {
+				return false;
+			}
+
+			if (res != 0 && res != 1) {
+				if (dlssgEvalFailureCount++ < 5) {
+					Vitrail.logger().warn("DLSS Frame Generation evaluate failed with code 0x{}", Integer.toHexString(res));
+				}
+				return false;
+			}
+			dlssgEvalFailureCount = 0;
+			return true;
+		} catch (Throwable t) {
+			Vitrail.logger().error("Exception during DLSS Frame Generation evaluate", t);
+			return false;
+		}
+	}
+
+	public static boolean evaluateFrameGeneration(
+			long cmdBuffer,
+			long inColorView, long inColorImage, int inColorFormat,
+			long outInterpolatedView, long outInterpolatedImage, int outInterpolatedFormat,
+			long inDepthView, long inDepthImage, int inDepthFormat,
+			long inMvView, long inMvImage, int inMvFormat,
+			int targetWidth, int targetHeight,
+			int mvecWidth, int mvecHeight,
+			float mvScaleX, float mvScaleY,
+			boolean resetAccumulation
+	) {
+		return evaluateFrameGeneration(
+				cmdBuffer,
+				inColorView, inColorImage, inColorFormat,
+				0L, 0L, 0,
+				outInterpolatedView, outInterpolatedImage, outInterpolatedFormat,
+				inDepthView, inDepthImage, inDepthFormat,
+				inMvView, inMvImage, inMvFormat,
+				targetWidth, targetHeight,
+				mvecWidth, mvecHeight,
+				mvScaleX, mvScaleY,
+				resetAccumulation
+		);
+	}
+
+	public static void releaseFrameGenerationFeature() {
+		if (frameGenerationCreated && fnDlssgReleaseFeature != null) {
+			try {
+				fnDlssgReleaseFeature.invokeExact();
+			} catch (Throwable ignored) {
+			}
+			frameGenerationCreated = false;
+			currentDlssgWidth = 0;
+			currentDlssgHeight = 0;
+		}
+	}
+
 	public static void shutdown() {
 		releaseFeature();
+		releaseFrameGenerationFeature();
 		if (initialized && fnShutdown != null) {
 			try {
 				fnShutdown.invokeExact();

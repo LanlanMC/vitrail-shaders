@@ -120,8 +120,8 @@ final class MotionVectors {
 
 	private static final String UNIFORM_BLOCK = "OfMotionVectors";
 
-	/** Two matrices and two pairs, which std140 lays out at 64, 64, 8 and 8. */
-	private static final int BLOCK_BYTES = 144;
+	/** Two matrices, two pairs, and one parameter vec4, laid out at 64, 64, 8, 8, 16. */
+	private static final int BLOCK_BYTES = 160;
 
 	/** Two triangles, the quad every full screen pass of this engine draws. */
 	private static final int VERTICES = 6;
@@ -156,6 +156,7 @@ final class MotionVectors {
 				mat4 of_ToPreviousClip;
 				vec2 of_Size;
 				vec2 of_InverseSize;
+				vec4 of_HandParams; // x: handMinDepth, y: handMaxDepth, z: handDrawn, w: unused
 			};
 
 			layout(location = 0) out vec2 ofFragData0;
@@ -163,6 +164,13 @@ final class MotionVectors {
 			void main() {
 				vec2 uv = gl_FragCoord.xy * of_InverseSize;
 				float depth = (texture(DepthSampler, uv).r - %s) / %s;
+
+				// Hand check: when hand is drawn, first-person hand depth in reversed Z is ~[0.4375, 0.5625].
+				// It has no valid world-space camera reprojection vector. Output 0 to avoid massive smearing.
+				if (of_HandParams.z > 0.5 && depth >= of_HandParams.x && depth <= of_HandParams.y) {
+					ofFragData0 = vec2(0.0);
+					return;
+				}
 
 				vec4 here = of_FromScreen * vec4(uv * 2.0 - 1.0, depth, 1.0);
 				vec4 before = of_ToPreviousClip * (here / here.w);
@@ -281,13 +289,15 @@ final class MotionVectors {
 				.translate((float) (now.x() - before.x()), (float) (now.y() - before.y()),
 						(float) (now.z() - before.z()));
 
+		boolean handDrawn = HandDraw.draws();
 		this.block.rotate();
 		try (GpuBufferSlice.MappedView mapped = this.block.currentBuffer().map(false, true)) {
 			Std140Builder.intoBuffer(mapped.data())
 					.putMat4f(this.fromScreen)
 					.putMat4f(this.toPreviousClip)
 					.putVec2(width, height)
-					.putVec2(1.0F / width, 1.0F / height);
+					.putVec2(1.0F / width, 1.0F / height)
+					.putVec4(0.430F, 0.570F, handDrawn ? 1.0F : 0.0F, 0.0F);
 		}
 
 		try (RenderPass pass = encoder.createRenderPass(() -> LABEL, this.vectors.view(),

@@ -12,13 +12,21 @@ import dev.vitrail.pack.model.ProgramStage;
 import dev.vitrail.render.BufferBlending;
 import dev.vitrail.render.GeometryStage;
 import dev.vitrail.render.WideSamplerSets;
+import dev.vitrail.render.reflex.ReflexBridge;
+import dev.vitrail.render.streamline.StreamlineBridge;
 import dev.vitrail.Vitrail;
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.KHRPortabilitySubset;
 import org.lwjgl.vulkan.VK12;
+import org.lwjgl.vulkan.VkAllocationCallbacks;
 import org.lwjgl.vulkan.VkDevice;
+import org.lwjgl.vulkan.VkDeviceCreateInfo;
+import org.lwjgl.vulkan.VkInstance;
+import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
 import org.lwjgl.vulkan.VkPhysicalDevicePortabilitySubsetFeaturesKHR;
@@ -30,7 +38,9 @@ import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Properties;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
@@ -145,6 +155,25 @@ public abstract class VulkanBackendMixin {
 			VulkanBackend.VK12_FEATURES_STRUCT, "uniformAndStorageBuffer8BitAccess",
 			VkPhysicalDeviceVulkan12Features.UNIFORMANDSTORAGEBUFFER8BITACCESS);
 
+	@Unique
+	private static final VulkanFeature TIMELINE_SEMAPHORE = new VulkanFeature(
+			VulkanBackend.VK12_FEATURES_STRUCT, "timelineSemaphore",
+			VkPhysicalDeviceVulkan12Features.TIMELINESEMAPHORE);
+
+	@Unique
+	private static final List<String> DLSS_DEVICE_EXTENSIONS = List.of(
+			"VK_NVX_binary_import",
+			"VK_NVX_image_view_handle",
+			"VK_KHR_push_descriptor",
+			"VK_KHR_buffer_device_address",
+			"VK_EXT_buffer_device_address",
+			"VK_KHR_timeline_semaphore",
+			"VK_KHR_external_memory",
+			"VK_KHR_external_memory_win32",
+			"VK_KHR_external_semaphore",
+			"VK_KHR_external_semaphore_win32"
+	);
+
 	// The stage a pack puts between its vertex and its fragment stage. Iris links a .gsh whenever
 	// the pack ships one and OpenGL asks nothing of the driver for it; Vulkan makes it an optional
 	// feature, and the game, which has no geometry stage of its own, never asks for it.
@@ -256,11 +285,89 @@ public abstract class VulkanBackendMixin {
 		enable(physical, features, UNIFORM_STORAGE_16, enabled, NARROW);
 		enable(physical, features, STORAGE_8, enabled, NARROW);
 		enable(physical, features, UNIFORM_STORAGE_8, enabled, NARROW);
+		List<String> dlssExts = new ArrayList<>();
+		for (String ext : DLSS_DEVICE_EXTENSIONS) {
+			if (physical.hasDeviceExtension(ext)) {
+				extensions.add(ext);
+				dlssExts.add(ext);
+			}
+		}
+		boolean reflexSupported = physical.hasDeviceExtension("VK_NV_low_latency2");
+		if (reflexSupported) {
+			extensions.add("VK_NV_low_latency2");
+			dlssExts.add("VK_NV_low_latency2");
+			enable(physical, features, TIMELINE_SEMAPHORE, enabled, "NVIDIA Reflex timeline semaphore");
+			Vitrail.logger().info("Vulkan Reflex: VK_NV_low_latency2 supported and enabled");
+		}
+		if (!dlssExts.isEmpty()) {
+			Vitrail.logger().info("Vulkan DLSS extensions: {}", String.join(", ", dlssExts));
+		}
 		if (!enabled.isEmpty()) {
 			Vitrail.logger().info("Vulkan device features: {}", String.join(", ", enabled));
 		}
 
-		return original.call(extensions, physical, features);
+		VkDevice device = original.call(extensions, physical, features);
+		ReflexBridge.initDevice(device, reflexSupported);
+		StreamlineBridge.onDeviceCreated(device);
+		return device;
+	}
+
+	@WrapOperation(
+			method = "findPhysicalDevice",
+			at = @At(
+					value = "INVOKE",
+					target = "Lorg/lwjgl/vulkan/VK12;vkEnumeratePhysicalDevices(Lorg/lwjgl/vulkan/VkInstance;Ljava/nio/IntBuffer;Lorg/lwjgl/PointerBuffer;)I"
+			)
+	)
+	private static int vitrail$enumeratePhysicalDevices(
+			VkInstance instance,
+			IntBuffer pPhysicalDeviceCount,
+			PointerBuffer pPhysicalDevices,
+			Operation<Integer> original
+	) {
+		if (StreamlineBridge.isCandidate() && StreamlineBridge.prepareStreamline()) {
+			try {
+				long countAddr = MemoryUtil.memAddress(pPhysicalDeviceCount);
+				long devsAddr = pPhysicalDevices != null ? pPhysicalDevices.address() : 0L;
+				return StreamlineBridge.streamlineEnumeratePhysicalDevices(instance.address(), countAddr, devsAddr);
+			} catch (Throwable t) {
+				Vitrail.logger().warn("Streamline vkEnumeratePhysicalDevices failed, falling back: {}", t.getMessage());
+			}
+		}
+		return original.call(instance, pPhysicalDeviceCount, pPhysicalDevices);
+	}
+
+	@WrapOperation(
+			method = "createDevice(Ljava/util/Collection;Lcom/mojang/blaze3d/vulkan/VulkanPhysicalDevice;Ljava/util/Set;)Lorg/lwjgl/vulkan/VkDevice;",
+			at = @At(
+					value = "INVOKE",
+					target = "Lorg/lwjgl/vulkan/VK12;vkCreateDevice(Lorg/lwjgl/vulkan/VkPhysicalDevice;Lorg/lwjgl/vulkan/VkDeviceCreateInfo;Lorg/lwjgl/vulkan/VkAllocationCallbacks;Lorg/lwjgl/PointerBuffer;)I"
+			)
+	)
+	private static int vitrail$createStreamlineDevice(
+			VkPhysicalDevice physicalDevice,
+			VkDeviceCreateInfo pCreateInfo,
+			VkAllocationCallbacks pAllocator,
+			PointerBuffer pDevice,
+			Operation<Integer> original
+	) {
+		if (StreamlineBridge.isCandidate() && StreamlineBridge.prepareStreamline()) {
+			try {
+				long allocAddr = pAllocator != null ? pAllocator.address() : 0L;
+				int res = StreamlineBridge.streamlineCreateDevice(physicalDevice.address(), pCreateInfo.address(), allocAddr, pDevice.address());
+				if (res == 0) {
+					return res;
+				}
+				Vitrail.logger().warn("Streamline vkCreateDevice returned error 0x{}, falling back to native", Integer.toHexString(res));
+				StreamlineBridge.rejectStreamline();
+				pDevice.put(pDevice.position(), 0L);
+			} catch (Throwable t) {
+				Vitrail.logger().warn("Streamline vkCreateDevice exception, falling back to native: {}", t.getMessage());
+				StreamlineBridge.rejectStreamline();
+				pDevice.put(pDevice.position(), 0L);
+			}
+		}
+		return original.call(physicalDevice, pCreateInfo, pAllocator, pDevice);
 	}
 
 	@Unique
@@ -320,5 +427,10 @@ public abstract class VulkanBackendMixin {
 			VK12.vkGetPhysicalDeviceFeatures2(physical.vkPhysicalDevice(), queried);
 			return feature.get(queried);
 		}
+	}
+
+	@Inject(method = "unloadLibrary", at = @At("HEAD"))
+	private void vitrail$onUnloadLibrary(org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
+		dev.vitrail.render.streamline.StreamlineBridge.shutdown();
 	}
 }

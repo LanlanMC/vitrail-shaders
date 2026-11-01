@@ -15,6 +15,8 @@ import dev.vitrail.pack.target.PackDirectives;
 import dev.vitrail.pack.texture.CustomImages;
 import dev.vitrail.pack.texture.CustomStorage;
 import dev.vitrail.render.pbr.PbrAtlases;
+import dev.vitrail.render.reflex.ReflexBridge;
+import dev.vitrail.render.reflex.ReflexMode;
 import dev.vitrail.render.storage.StorageBuffers;
 import dev.vitrail.render.storage.StorageImages;
 import dev.vitrail.render.timing.PassTimings;
@@ -192,6 +194,8 @@ public final class PackChoice {
 			RenderScale.dlssMode(parseDlssMode(askedFor.dlssMode()));
 			RenderScale.dlssPreset(parseDlssPreset(askedFor.dlssPreset()));
 			RenderScale.dlssSharpness(askedFor.dlssSharpness());
+			RenderScale.dlssFrameGeneration(askedFor.dlssFrameGeneration());
+			ReflexBridge.mode(parseReflexMode(askedFor.reflexMode()));
 			// Here and not lower down, because it is read during the expansion of the pack's very
 			// first unit: the shadow map's size is a declaration of the pack's own text, and the
 			// scale is applied by rewriting that declaration rather than by allocating something
@@ -1064,6 +1068,50 @@ public final class PackChoice {
 		}
 	}
 
+	public static ReflexMode reflexMode() {
+		return ReflexBridge.mode();
+	}
+
+	public static void reflexMode(Path gameDirectory, ReflexMode mode) {
+		ReflexMode actual = mode == null ? ReflexMode.OFF : mode;
+		ReflexBridge.mode(actual);
+		askedFor = askedFor.withReflexMode(actual.name().toLowerCase(Locale.ROOT));
+
+		Path file = packFile(gameDirectory);
+		try {
+			PackFile.write(file, PackFile.read(file).withReflexMode(actual.name().toLowerCase(Locale.ROOT)));
+		} catch (IOException | RuntimeException e) {
+			Vitrail.logger().error("Vitrail could not write the Reflex mode to {}", file, e);
+		}
+	}
+
+	public static boolean dlssFrameGeneration() {
+		return RenderScale.dlssFrameGeneration();
+	}
+
+	public static void dlssFrameGeneration(Path gameDirectory, boolean enabled) {
+		RenderScale.dlssFrameGeneration(enabled);
+		askedFor = askedFor.withDlssFrameGeneration(enabled);
+
+		Path file = packFile(gameDirectory);
+		try {
+			PackFile.write(file, PackFile.read(file).withDlssFrameGeneration(enabled));
+		} catch (IOException | RuntimeException e) {
+			Vitrail.logger().error("Vitrail could not write the DLSS Frame Generation state to {}", file, e);
+		}
+	}
+
+	private static ReflexMode parseReflexMode(String name) {
+		if (name == null || name.isBlank()) {
+			return ReflexMode.OFF;
+		}
+		try {
+			return ReflexMode.valueOf(name.trim().toUpperCase(Locale.ROOT));
+		} catch (IllegalArgumentException e) {
+			return ReflexMode.OFF;
+		}
+	}
+
 	/**
 	 * Rebuilds everything when the world under the pack has changed, which is not the same thing as
 	 * a file having changed and is the only reload nobody can ask for.
@@ -1167,6 +1215,10 @@ public final class PackChoice {
 	 * already forgotten is what decides whether one is printed.
 	 */
 	private static void readAgain(Path gameDirectory) {
+		RenderScale.invalidateCachedHandles();
+		dev.vitrail.render.dlss.VitrailFramePresenter.INSTANCE.onPackReload();
+		GraphicsApi.waitDeviceIdle();
+
 		// The chain stops answering BEFORE anything of it is freed, and the order is the whole
 		// of issue 111. Every accessor below reads this field, and a pass of the frame in
 		// hand asks one of them: the sky asks for its own draw as it opens its render pass.

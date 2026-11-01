@@ -13,12 +13,20 @@ import dev.vitrail.pack.model.ProgramStage;
 import dev.vitrail.render.BufferBlending;
 import dev.vitrail.render.GeometryStage;
 import dev.vitrail.render.WideSamplerSets;
+import dev.vitrail.render.reflex.ReflexBridge;
+import dev.vitrail.render.streamline.StreamlineBridge;
 import dev.vitrail.Vitrail;
+import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.VK12;
+import org.lwjgl.vulkan.VkAllocationCallbacks;
 import org.lwjgl.vulkan.VkDevice;
+import org.lwjgl.vulkan.VkDeviceCreateInfo;
+import org.lwjgl.vulkan.VkInstance;
+import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 import org.lwjgl.vulkan.VkPhysicalDeviceSubgroupProperties;
@@ -26,7 +34,9 @@ import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Properties;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -254,6 +264,12 @@ public abstract class VulkanBackendMixin {
 				dlssExts.add(ext);
 			}
 		}
+		boolean reflexSupported = physical.hasDeviceExtension("VK_NV_low_latency2");
+		if (reflexSupported) {
+			extensions.add("VK_NV_low_latency2");
+			dlssExts.add("VK_NV_low_latency2");
+			Vitrail.logger().info("Vulkan Reflex: VK_NV_low_latency2 supported and enabled");
+		}
 		if (!dlssExts.isEmpty()) {
 			Vitrail.logger().info("Vulkan DLSS extensions: {}", String.join(", ", dlssExts));
 		}
@@ -278,8 +294,69 @@ public abstract class VulkanBackendMixin {
 			Vitrail.logger().info("Vulkan device features: {}", String.join(", ", enabled));
 		}
 
-		return original.call(enabledSets.composite(new FeatureSet("Vitrail", extensions, features)),
+		VkDevice device = original.call(enabledSets.composite(new FeatureSet("Vitrail", extensions, features)),
 				physical);
+		ReflexBridge.initDevice(device, reflexSupported);
+		StreamlineBridge.onDeviceCreated(device);
+		return device;
+	}
+
+	@WrapOperation(
+			method = "findPhysicalDevice",
+			at = @At(
+					value = "INVOKE",
+					target = "Lorg/lwjgl/vulkan/VK12;vkEnumeratePhysicalDevices(Lorg/lwjgl/vulkan/VkInstance;Ljava/nio/IntBuffer;Lorg/lwjgl/PointerBuffer;)I"
+			)
+	)
+	private static int vitrail$enumeratePhysicalDevices(
+			VkInstance instance,
+			IntBuffer pPhysicalDeviceCount,
+			PointerBuffer pPhysicalDevices,
+			Operation<Integer> original
+	) {
+		if (StreamlineBridge.isCandidate() && StreamlineBridge.prepareStreamline()) {
+			try {
+				long countAddr = MemoryUtil.memAddress(pPhysicalDeviceCount);
+				long devsAddr = pPhysicalDevices != null ? pPhysicalDevices.address() : 0L;
+				return StreamlineBridge.streamlineEnumeratePhysicalDevices(instance.address(), countAddr, devsAddr);
+			} catch (Throwable t) {
+				Vitrail.logger().warn("Streamline vkEnumeratePhysicalDevices failed, falling back: {}", t.getMessage());
+			}
+		}
+		return original.call(instance, pPhysicalDeviceCount, pPhysicalDevices);
+	}
+
+	@WrapOperation(
+			method = "createDevice(Lcom/mojang/renderpearl/backend/vulkan/init/FeatureSet;Lcom/mojang/renderpearl/backend/vulkan/VulkanPhysicalDevice;)Lorg/lwjgl/vulkan/VkDevice;",
+			at = @At(
+					value = "INVOKE",
+					target = "Lorg/lwjgl/vulkan/VK12;vkCreateDevice(Lorg/lwjgl/vulkan/VkPhysicalDevice;Lorg/lwjgl/vulkan/VkDeviceCreateInfo;Lorg/lwjgl/vulkan/VkAllocationCallbacks;Lorg/lwjgl/PointerBuffer;)I"
+			)
+	)
+	private static int vitrail$createStreamlineDevice(
+			VkPhysicalDevice physicalDevice,
+			VkDeviceCreateInfo pCreateInfo,
+			VkAllocationCallbacks pAllocator,
+			PointerBuffer pDevice,
+			Operation<Integer> original
+	) {
+		if (StreamlineBridge.isCandidate() && StreamlineBridge.prepareStreamline()) {
+			try {
+				long allocAddr = pAllocator != null ? pAllocator.address() : 0L;
+				int res = StreamlineBridge.streamlineCreateDevice(physicalDevice.address(), pCreateInfo.address(), allocAddr, pDevice.address());
+				if (res == 0) {
+					return res;
+				}
+				Vitrail.logger().warn("Streamline vkCreateDevice returned error 0x{}, falling back to native", Integer.toHexString(res));
+				StreamlineBridge.rejectStreamline();
+				pDevice.put(pDevice.position(), 0L);
+			} catch (Throwable t) {
+				Vitrail.logger().warn("Streamline vkCreateDevice exception, falling back to native: {}", t.getMessage());
+				StreamlineBridge.rejectStreamline();
+				pDevice.put(pDevice.position(), 0L);
+			}
+		}
+		return original.call(physicalDevice, pCreateInfo, pAllocator, pDevice);
 	}
 
 	@Unique
@@ -339,5 +416,10 @@ public abstract class VulkanBackendMixin {
 			VK12.vkGetPhysicalDeviceFeatures2(physical.vkPhysicalDevice(), queried);
 			return feature.get(queried);
 		}
+	}
+
+	@Inject(method = "unloadLibrary", at = @At("HEAD"))
+	private void vitrail$onUnloadLibrary(org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
+		dev.vitrail.render.streamline.StreamlineBridge.shutdown();
 	}
 }

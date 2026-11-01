@@ -88,9 +88,14 @@ public final class ScreenText {
 	public static final String DLSS_PRESET_TOOLTIP = "options.vitrail.dlss_preset_tooltip";
 	public static final String DLSS_SHARPNESS = "options.vitrail.dlss_sharpness";
 	public static final String DLSS_SHARPNESS_TOOLTIP = "options.vitrail.dlss_sharpness_tooltip";
+	public static final String DLSS_FRAME_GENERATION = "options.vitrail.dlss_frame_generation";
+	public static final String DLSS_FRAME_GENERATION_TOOLTIP = "options.vitrail.dlss_frame_generation_tooltip";
 
 	public static final String TEMPORAL_FOLD = "options.vitrail.temporal_fold";
 	public static final String TEMPORAL_FOLD_TOOLTIP = "options.vitrail.temporal_fold_tooltip";
+
+	public static final String REFLEX_MODE = "options.vitrail.reflex_mode";
+	public static final String REFLEX_MODE_TOOLTIP = "options.vitrail.reflex_mode_tooltip";
 
 	/**
 	 * How large the compiled-shader disk store may grow. No counterpart in Iris, so both strings

@@ -200,4 +200,21 @@ public final class GraphicsApi {
 	public static void copyPushConstants(RenderPipeline.Builder builder, RenderPipeline from) {
 		// Nothing: the rebuilt pipeline keeps the name that decides them.
 	}
+
+	/**
+	 * Waits until the GPU device finishes all in-flight work before releasing resources or reallocating targets.
+	 */
+	public static void waitDeviceIdle() {
+		try {
+			org.lwjgl.vulkan.VkDevice vkDevice = dev.vitrail.render.reflex.ReflexBridge.device();
+			if (vkDevice != null) {
+				if (dev.vitrail.render.streamline.StreamlineBridge.usesStreamline()) {
+					dev.vitrail.render.streamline.StreamlineBridge.streamlineDeviceWaitIdle(vkDevice.address());
+				}
+				org.lwjgl.vulkan.VK10.vkDeviceWaitIdle(vkDevice);
+			}
+		} catch (Throwable t) {
+			Vitrail.logger().warn("waitDeviceIdle encountered exception: {}", t.getMessage());
+		}
+	}
 }
