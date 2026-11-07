@@ -1107,7 +1107,7 @@ public final class PackChoice {
 	}
 
 	public static void dlssFrameGenerationMultiplier(Path gameDirectory, int multiplier) {
-		int clamped = Math.clamp(multiplier, 1, 3);
+		int clamped = Math.clamp(multiplier, 1, 4);
 		RenderScale.dlssFrameGenerationMultiplier(clamped);
 		askedFor = askedFor.withDlssFrameGenerationMultiplier(clamped);
 

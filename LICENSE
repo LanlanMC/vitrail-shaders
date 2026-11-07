@@ -163,3 +163,43 @@ whether future versions of the GNU Lesser General Public License shall
 apply, that proxy's public statement of acceptance of any version is
 permanent authorization for you to choose that version for the
 Library.
+
+==============================================================================
+Additional Terms, Third-Party Notices, and Disclaimers
+==============================================================================
+
+The following additional terms and notices apply to Vitrail in accordance
+with Section 7 of the GNU General Public License version 3:
+
+1. Trademark Notices and Non-Affiliation (Section 7(e) & 7(d))
+   - NVIDIA, the NVIDIA logo, GeForce, GeForce RTX, RTX, DLSS, and NVIDIA
+     Reflex are trademarks and/or registered trademarks of NVIDIA Corporation
+     in the United States and/or other countries.
+   - Vitrail is an independent open-source project and is NOT affiliated with,
+     endorsed by, sponsored by, or certified by NVIDIA Corporation.
+   - AMD, FidelityFX, and FSR are trademarks of Advanced Micro Devices, Inc.
+
+2. Exclusion of Proprietary NVIDIA Binaries
+   - This repository and its distributed artifacts do NOT include, bundle,
+     distribute, or relicense NVIDIA proprietary binary algorithm files,
+     specifically "nvngx_dlss.dll" and "nvngx_dlssg.dll".
+   - Any use of NVIDIA DLSS Super Resolution or NVIDIA DLSS Frame Generation
+     requires the user to independently acquire genuine, legally obtained
+     copies of the necessary libraries and place them in the game environment's
+     local directory (.minecraft/vitrail/dlss/).
+   - Vitrail provides solely independent Vulkan runtime integration interfaces,
+     parameter translation logic, and compatibility bindings.
+
+3. Third-Party Licenses and Components
+   - NVIDIA Streamline SDK and Reflex components included or referenced by
+     Vitrail (sl.interposer.dll, sl.common.dll, sl.dlss_g.dll, sl.reflex.dll,
+     sl.pcl.dll, NvLowLatencyVk.dll) are subject to the MIT License / Apache
+     License 2.0 / NVIDIA RTX SDKs License. Copyright (c) 2022-2024 NVIDIA
+     CORPORATION & AFFILIATES.
+   - AMD FidelityFX Super Resolution (FSR) components are subject to the
+     MIT License. Copyright (c) 2021 Advanced Micro Devices, Inc.
+   - Portions of shaderpack loading and format parsing are adapted from Iris
+     under the GNU Lesser General Public License version 3.
+   - An exhaustive, file-by-file accounting of all third-party code, licenses,
+     and modifications is provided in the NOTICE file accompanying this project.
+

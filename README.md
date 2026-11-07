@@ -120,3 +120,14 @@ ordinary GPL rather than as a standalone document.
 Parts of the pack loader and of the value catalogue are adapted from Iris, which
 is LGPL-3.0 as well. What was taken and what was changed on the way is recorded
 in [NOTICE](NOTICE).
+
+### Trademarks & Legal Notice
+
+- NVIDIA, GeForce, RTX, DLSS, and NVIDIA Reflex are registered trademarks of NVIDIA
+  Corporation. Vitrail is an independent open-source project and is not affiliated
+  with, sponsored by, or endorsed by NVIDIA Corporation.
+- This repository and its distributed builds do **NOT** include or distribute NVIDIA
+  proprietary NGX algorithm libraries (`nvngx_dlss.dll`, `nvngx_dlssg.dll`). Users
+  wishing to enable DLSS Super Resolution or Frame Generation must provide their own
+  legally acquired copies in `.minecraft/vitrail/dlss/`.
+

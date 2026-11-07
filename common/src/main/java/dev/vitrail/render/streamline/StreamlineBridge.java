@@ -569,15 +569,27 @@ public final class StreamlineBridge {
 			hasPrevViewProj = true;
 
 			// Synchronize dynamic MFG multiplier if requested and ready
-			if (enableFg && isMfgReady() && appliedMultiplier != requestedMultiplier) {
+			if (enableFg && isMfgReady()) {
 				FgState state = queryFgState();
 				int maxGen = state.maxGenerated() > 0 ? state.maxGenerated() : 3;
-				int admitted = Math.clamp(requestedMultiplier, 1, maxGen);
-				int effective = requestMfgCount(admitted);
-				if (appliedMultiplier != effective) {
-					appliedMultiplier = effective;
-					Vitrail.logger().info("[Vitrail DLSS-G] Frame generation multiplier updated: requested={}x, effective={}x ({})",
-							requestedMultiplier + 1, effective + 1, getMfgPathName());
+
+				int targetCount;
+				if (dev.vitrail.render.RenderScale.isDynamicFrameGeneration()) {
+					targetCount = dev.vitrail.render.dlss.DynamicMfgController.INSTANCE.update(System.nanoTime(), maxGen);
+				} else {
+					targetCount = Math.clamp(requestedMultiplier, 1, maxGen);
+				}
+
+				if (appliedMultiplier != targetCount) {
+					int effective = requestMfgCount(targetCount);
+					if (appliedMultiplier != effective) {
+						appliedMultiplier = effective;
+						String modeStr = dev.vitrail.render.RenderScale.isDynamicFrameGeneration()
+								? "Dynamic " + (effective + 1) + "x"
+								: (targetCount + 1) + "x";
+						Vitrail.logger().info("[Vitrail DLSS-G] Frame generation multiplier updated: {} ({})",
+								modeStr, getMfgPathName());
+					}
 				}
 			}
 

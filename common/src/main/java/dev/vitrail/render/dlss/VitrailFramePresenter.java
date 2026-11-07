@@ -134,6 +134,7 @@ public final class VitrailFramePresenter {
 		needsHistoryReset = true;
 		wasFgActive = false;
 		generatedCountCheck.reset();
+		DynamicMfgController.INSTANCE.reset();
 	}
 
 	public void onLeaveWorld() {

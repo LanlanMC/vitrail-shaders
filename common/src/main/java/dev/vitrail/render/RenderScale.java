@@ -558,6 +558,8 @@ public final class RenderScale {
 	private static boolean lastDlssgEvaluated = false;
 	private static boolean hasPendingInterpolatedFrame = false;
 
+	public static final int MULTIPLIER_DYNAMIC = 4;
+
 	public static boolean dlssActive() {
 		return dlssActive;
 	}
@@ -566,12 +568,19 @@ public final class RenderScale {
 		return dlssFrameGeneration;
 	}
 
+	public static boolean isDynamicFrameGeneration() {
+		return dlssFrameGeneration && dlssFrameGenerationMultiplier == MULTIPLIER_DYNAMIC;
+	}
+
 	public static int dlssFrameGenerationMultiplier() {
 		return dlssFrameGenerationMultiplier;
 	}
 
 	public static void dlssFrameGenerationMultiplier(int multiplier) {
-		dlssFrameGenerationMultiplier = Math.max(1, multiplier);
+		dlssFrameGenerationMultiplier = Math.clamp(multiplier, 1, MULTIPLIER_DYNAMIC);
+		if (dlssFrameGenerationMultiplier == MULTIPLIER_DYNAMIC) {
+			dev.vitrail.render.dlss.DynamicMfgController.INSTANCE.reset();
+		}
 		dev.vitrail.render.streamline.StreamlineBridge.setRequestedMultiplier(dlssFrameGenerationMultiplier);
 	}
 

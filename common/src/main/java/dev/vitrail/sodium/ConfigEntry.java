@@ -313,10 +313,13 @@ public final class ConfigEntry implements ConfigEntryPoint {
 				.setName(Component.translatable(ScreenText.DLSS_FRAME_GENERATION))
 				.setTooltip(_ -> Component.translatable(ScreenText.DLSS_FRAME_GENERATION_TOOLTIP))
 				.setDefaultValue(PackFile.DEFAULT_DLSS_FRAME_GENERATION ? 1 : 0)
-				.setRange(new Range(0, 3, 1))
+				.setRange(new Range(0, 4, 1))
 				.setValueFormatter(val -> {
 					if (val <= 0) {
 						return CommonComponents.OPTION_OFF;
+					}
+					if (val == 4) {
+						return Component.translatable("options.vitrail.dlss_fg.dynamic");
 					}
 					return Component.literal((val + 1) + "x");
 				})

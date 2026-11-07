@@ -130,9 +130,16 @@ public final class VitrailDebugEntry implements DebugScreenEntry {
 						"%sDLSS-G: Bypassed (%s)",
 						PREFIX, dev.vitrail.render.streamline.StreamlineBridge.decodeFgStatus(fgStatusVal)));
 			} else if (actuallyPresented > 1 && dispFps > 0) {
+				boolean dynamic = RenderScale.isDynamicFrameGeneration();
+				String dynamicTag = "";
+				if (dynamic) {
+					int targetFps = dev.vitrail.render.dlss.DynamicMfgController.INSTANCE.targetFps();
+					boolean guarded = dev.vitrail.render.dlss.DynamicMfgController.INSTANCE.isGuardedByLowFps();
+					dynamicTag = guarded ? " [Dynamic, Guard <60]" : " [Dynamic -> " + targetFps + " FPS]";
+				}
 				displayer.addToGroup(GROUP, String.format(Locale.ROOT,
-						"%sDLSS-G: %dx (%d -> %d FPS)",
-						PREFIX, actuallyPresented, baseFps, dispFps));
+						"%sDLSS-G: %dx (%d -> %d FPS)%s",
+						PREFIX, actuallyPresented, baseFps, dispFps, dynamicTag));
 			} else {
 				displayer.addToGroup(GROUP, PREFIX + "DLSS-G: Standby");
 			}

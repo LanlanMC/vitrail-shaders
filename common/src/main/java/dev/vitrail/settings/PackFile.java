@@ -228,12 +228,12 @@ public record PackFile(String name, boolean enabled, int shadowDistance, int ren
 						int parsed = number(value, 0);
 						dlssFrameGeneration = parsed > 0;
 						if (parsed > 0) {
-							dlssFrameGenerationMultiplier = Math.clamp(parsed, 1, 3);
+							dlssFrameGenerationMultiplier = Math.clamp(parsed, 1, 4);
 						}
 					}
 				}
 				case DLSS_FRAME_GENERATION_MULTIPLIER_KEY -> {
-					dlssFrameGenerationMultiplier = Math.clamp(number(value, dlssFrameGenerationMultiplier), 1, 3);
+					dlssFrameGenerationMultiplier = Math.clamp(number(value, dlssFrameGenerationMultiplier), 1, 4);
 				}
 				default -> {
 				}

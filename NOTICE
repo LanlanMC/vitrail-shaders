@@ -1045,3 +1045,31 @@ MIT License
   in the shader from textureSize, the optional noise-detection term of RCAS is not carried, the
   reference itself compiling it out by default, and the sharpness is baked at the 0.2 stops the
   FSR demo ships with.
+
+NVIDIA Streamline SDK & NVIDIA Reflex SDK, https://github.com/NVIDIA-RTX/Streamline
+Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+MIT License / Apache License 2.0 / NVIDIA RTX SDKs License
+
+  common/src/main/resources/natives/windows/x86_64/ includes prebuilt binary modules from the
+  NVIDIA Streamline SDK (sl.interposer.dll, sl.common.dll, sl.dlss_g.dll, sl.reflex.dll, sl.pcl.dll,
+  and NvLowLatencyVk.dll).
+  common/src/main/java/dev/vitrail/render/streamline/StreamlineBridge.java and
+  common/src/main/java/dev/vitrail/render/dlss/VitrailFramePresenter.java interface with Streamline
+  via Java Foreign Function & Memory (FFM) API to orchestrate frame pacing, swapchain presentation,
+  multi-frame generation dispatch (up to 4x multiplier), and low-latency synchronization (Reflex).
+
+  Notice of Non-Distribution:
+  Neither this repository nor its distributed archives package or redistribute proprietary NVIDIA
+  NGX core algorithm binaries (nvngx_dlss.dll and nvngx_dlssg.dll). Users desiring DLSS Super
+  Resolution or Frame Generation must provide legally acquired genuine libraries in
+  .minecraft/vitrail/dlss/.
+
+NVIDIA NGX Bridge and Compatibility Shim
+Copyright (c) 2026 Vitrail contributors
+GNU Lesser General Public License version 3
+
+  native/dlss/ (vitrail_dlss.dll) and native/ngx_shim/ (ngxshim.dll) provide clean-room, flat C ABI
+  interop wrappers and Vulkan device hooks. They transcribe public NVSDK NGX structures, function
+  prototypes, and feature enumerations (as published in public Vulkan NGX headers) into an
+  unmangled C ABI suited for Java FFM bindings, without reproducing proprietary algorithmic code.
+
