@@ -76,6 +76,38 @@ public final class VitrailFramePresenter {
 	private boolean needsHistoryReset = false;
 	private boolean wasFgActive = false;
 
+	private static final class GeneratedCountCheck {
+		private int warmup;
+		private int mismatch;
+
+		boolean reject(int expected, int actual) {
+			if (expected <= 2) {
+				reset();
+				return false;
+			}
+			if (warmup++ < 8) {
+				return false;
+			}
+			if (actual <= 1) {
+				mismatch = 0;
+				return false;
+			}
+			if (actual == expected) {
+				mismatch = 0;
+			} else {
+				mismatch++;
+			}
+			return mismatch >= 8;
+		}
+
+		void reset() {
+			warmup = 0;
+			mismatch = 0;
+		}
+	}
+
+	private final GeneratedCountCheck generatedCountCheck = new GeneratedCountCheck();
+
 	private VitrailFramePresenter() {
 	}
 
@@ -101,6 +133,7 @@ public final class VitrailFramePresenter {
 		pendingCount = 0;
 		needsHistoryReset = true;
 		wasFgActive = false;
+		generatedCountCheck.reset();
 	}
 
 	public void onLeaveWorld() {
@@ -236,6 +269,14 @@ public final class VitrailFramePresenter {
 		if (fgState != null) {
 			lastFgStatus = fgState.status();
 			lastActuallyPresented = fgState.actuallyPresented();
+			if (prepared && StreamlineBridge.isMfgReady()) {
+				int expected = StreamlineBridge.getEffectiveMultiplier() + 1;
+				if (generatedCountCheck.reject(expected, fgState.actuallyPresented())) {
+					Vitrail.logger().warn("[Vitrail DLSS-G] Multi-Frame Generation mismatch (expected {}x, got {}x) for 8 frames; reverting to standard 2x",
+							expected, fgState.actuallyPresented());
+					StreamlineBridge.rejectMfg();
+				}
+			}
 			if (fgActive && fgState.status() != lastReportedFgStatus) {
 				lastReportedFgStatus = fgState.status();
 				if (fgState.status() != 0) {

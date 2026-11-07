@@ -309,18 +309,32 @@ public final class ConfigEntry implements ConfigEntryPoint {
 	 * Requires an RTX 40 series GPU and automatically enables NVIDIA Reflex.
 	 */
 	private static OptionBuilder dlssFrameGeneration(ConfigBuilder builder) {
-		return builder.createBooleanOption(DLSS_FRAME_GENERATION)
+		return builder.createIntegerOption(DLSS_FRAME_GENERATION)
 				.setName(Component.translatable(ScreenText.DLSS_FRAME_GENERATION))
 				.setTooltip(_ -> Component.translatable(ScreenText.DLSS_FRAME_GENERATION_TOOLTIP))
-				.setDefaultValue(PackFile.DEFAULT_DLSS_FRAME_GENERATION)
-				.setBinding(enabled -> {
+				.setDefaultValue(PackFile.DEFAULT_DLSS_FRAME_GENERATION ? 1 : 0)
+				.setRange(new Range(0, 3, 1))
+				.setValueFormatter(val -> {
+					if (val <= 0) {
+						return CommonComponents.OPTION_OFF;
+					}
+					return Component.literal((val + 1) + "x");
+				})
+				.setBinding(val -> {
+					boolean enabled = val > 0;
 					PackChoice.dlssFrameGeneration(Vitrail.platform().gameDirectory(), enabled);
+					PackChoice.dlssFrameGenerationMultiplier(Vitrail.platform().gameDirectory(), Math.max(1, val));
 					if (enabled && PackChoice.reflexMode() == ReflexMode.OFF) {
 						PackChoice.reflexMode(Vitrail.platform().gameDirectory(), ReflexMode.ON);
 					}
-				}, PackChoice::dlssFrameGeneration)
+				}, () -> {
+					if (!PackChoice.dlssFrameGeneration()) {
+						return 0;
+					}
+					return PackChoice.dlssFrameGenerationMultiplier();
+				})
 				.setEnabledProvider(state -> state.readEnumOption(DLSS_MODE, DlssMode.class) != DlssMode.OFF
-						&& DlssBridge.isFrameGenerationSupported(), DLSS_MODE)
+						&& (DlssBridge.isFrameGenerationSupported() || dev.vitrail.render.streamline.StreamlineBridge.isFgSupported()), DLSS_MODE)
 				.setStorageHandler(() -> {})
 				.setImpact(OptionImpact.HIGH);
 	}

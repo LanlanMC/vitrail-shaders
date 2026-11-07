@@ -38,7 +38,7 @@
 	"options.vitrail.dlss_sharpness": "DLSS 锐化强度",
 	"options.vitrail.dlss_sharpness_tooltip": "DLSS 图像边缘与细节锐化强度。\n较高的数值边缘更锐利清晰，但过高可能产生轻微边缘噪点。\n立即生效，无需重载光影包。",
 	"options.vitrail.dlss_frame_generation": "DLSS 帧生成",
-	"options.vitrail.dlss_frame_generation_tooltip": "利用 NVIDIA Ada Lovelace 架构的独立硬件光流加速器进行 AI 实时补帧，成倍提升游戏帧率。\n需要 RTX 40 系列显卡并自动启用 NVIDIA Reflex。\n立即生效，无需重载光影包。",
+	"options.vitrail.dlss_frame_generation_tooltip": "利用 NVIDIA 光流加速器进行 AI 实时插帧，成倍提升游戏帧率。\n支持 2x（标准插帧）以及 3x / 4x 多帧生成（MFG）。\n需要 NVIDIA RTX 40/50 系列显卡，开启时自动启用 NVIDIA Reflex。\n立即生效，无需重载光影包。",
 	"options.vitrail.temporal_fold": "时域融合",
 	"options.vitrail.temporal_fold_tooltip": "将多个放大后的历史帧融合成一帧，使较低的渲染比例保留更多细节。\n远处的树叶和栅栏不再闪烁噪动；移动的物体可能会有微弱拖尾。\n需要渲染比例低于 100%。\n下一帧生效，无需重载光影包。",
 	"options.vitrail.reflex_mode": "NVIDIA Reflex",

@@ -56,6 +56,7 @@ public final class StreamlineBridge {
 			"sl.reflex.dll",
 			"sl.pcl.dll",
 			"NvLowLatencyVk.dll",
+			"nvngx_dlss.dll",
 			"nvngx_dlssg.dll"
 	);
 
@@ -73,6 +74,10 @@ public final class StreamlineBridge {
 	// Downcall MethodHandles
 	private static MethodHandle fnSlInit;
 	private static MethodHandle fnSlMfgConfigure;
+	private static MethodHandle fnSlMfgRequest;
+	private static MethodHandle fnSlMfgReady;
+	private static MethodHandle fnSlMfgPath;
+	private static MethodHandle fnSlAmperePrepare;
 	private static MethodHandle fnSlInitialized;
 	private static MethodHandle fnSlShutdown;
 	private static MethodHandle fnSlFgSupported;
@@ -101,6 +106,13 @@ public final class StreamlineBridge {
 	private static final Matrix4f prevViewProj = new Matrix4f();
 	private static boolean hasPrevViewProj = false;
 	private static int prepareErrorCount = 0;
+
+	// Multi-Frame Generation (MFG) tracking
+	private static boolean mfgReady = false;
+	private static int mfgPath = 0; // 0 = None/Standard 2x, 1 = RTX 50 Native, 2 = RTX 40 Ada Patched, 3 = RTX 30 Ampere
+	private static int requestedMultiplier = 1; // Number of intermediate generated frames (1 = 2x, 2 = 3x, 3 = 4x)
+	private static int appliedMultiplier = 1;
+	private static boolean mfgRejected = false;
 
 	private StreamlineBridge() {
 	}
@@ -148,6 +160,88 @@ public final class StreamlineBridge {
 		return reflexSupported;
 	}
 
+	public static boolean isMfgReady() {
+		if (!initialized || mfgRejected) {
+			return false;
+		}
+		if (!mfgReady && fnSlMfgReady != null) {
+			try {
+				mfgReady = ((int) fnSlMfgReady.invokeExact() == 1);
+				if (mfgReady && fnSlMfgPath != null) {
+					mfgPath = (int) fnSlMfgPath.invokeExact();
+					Vitrail.logger().info("[Vitrail DLSS-G] Multi-Frame Generation ready: path={} [{}]",
+							mfgPath, getMfgPathName());
+				}
+			} catch (Throwable ignored) {
+			}
+		}
+		return mfgReady;
+	}
+
+	public static int getMfgPath() {
+		return mfgPath;
+	}
+
+	public static String getMfgPathName() {
+		return switch (mfgPath) {
+			case 1 -> "Ada MFG";
+			case 2 -> "RTX 50 Native";
+			case 3 -> "Ampere SM86";
+			default -> "Standard 2x";
+		};
+	}
+
+	public static int getRequestedMultiplier() {
+		return requestedMultiplier;
+	}
+
+	public static void setRequestedMultiplier(int count) {
+		requestedMultiplier = Math.max(1, count);
+	}
+
+	public static int getEffectiveMultiplier() {
+		return appliedMultiplier;
+	}
+
+	/**
+	 * Request intermediate generated frame count from Streamline DLSS-G.
+	 *
+	 * @param generatedCount number of generated frames per tick:
+	 *                       1 = 2x presentation (1 real + 1 generated)
+	 *                       2 = 3x presentation (1 real + 2 generated)
+	 *                       3 = 4x presentation (1 real + 3 generated)
+	 * @return effective number of generated frames admitted by Streamline DLSS-G
+	 */
+	public static int requestMfgCount(int generatedCount) {
+		if (!usesStreamline() || fnSlMfgRequest == null) {
+			return 1;
+		}
+		if (mfgRejected || !mfgReady) {
+			return 1;
+		}
+		try {
+			int effective = (int) fnSlMfgRequest.invokeExact(generatedCount);
+			return Math.max(1, effective);
+		} catch (Throwable t) {
+			Vitrail.logger().warn("Streamline slMfgRequest failed: {}", t.getMessage());
+			return 1;
+		}
+	}
+
+	public static void rejectMfg() {
+		if (!mfgRejected) {
+			mfgRejected = true;
+			Vitrail.logger().warn("[Vitrail DLSS-G] Multi-Frame Generation rejected by runtime, reverting to standard 2x");
+			if (fnSlMfgRequest != null) {
+				try {
+					fnSlMfgRequest.invokeExact(1);
+				} catch (Throwable ignored) {
+				}
+			}
+			appliedMultiplier = 1;
+		}
+	}
+
 	public static synchronized boolean prepareStreamline() {
 		if (prepared) {
 			return initialized && !initFailed;
@@ -183,19 +277,45 @@ public final class StreamlineBridge {
 				MemorySegment logPathSeg = wideString(arena, logDir.toAbsolutePath().toString());
 
 				if (fnSlMfgConfigure != null) {
+					int targetMode = 3; // Request capacity for up to 4x (3 intermediate generated frames)
 					try {
-						int mfgR = (int) fnSlMfgConfigure.invokeExact(pluginPathSeg, 1);
-						Vitrail.logger().info("Streamline slMfgConfigure returned 0x{}", Integer.toHexString(mfgR));
+						int mfgR = (int) fnSlMfgConfigure.invokeExact(pluginPathSeg, targetMode);
+						Vitrail.logger().debug("Streamline slMfgConfigure({}x) returned 0x{}", targetMode + 1, Integer.toHexString(mfgR));
+						if (mfgR != 0) {
+							Vitrail.logger().warn("Streamline slMfgConfigure failed for {}x (0x{}), retrying with standard 2x",
+									targetMode + 1, Integer.toHexString(mfgR));
+							fnSlMfgConfigure.invokeExact(pluginPathSeg, 1);
+						}
 					} catch (Throwable t) {
-						Vitrail.logger().warn("Streamline slMfgConfigure failed", t);
+						Vitrail.logger().warn("Streamline slMfgConfigure failed, falling back to 2x", t);
+						try {
+							fnSlMfgConfigure.invokeExact(pluginPathSeg, 1);
+						} catch (Throwable ignored) {
+						}
 					}
 				}
 
 				int r = (int) fnSlInit.invokeExact(pluginPathSeg, logPathSeg);
 				if (r != 0 && r != 39 /* already init */) {
-					Vitrail.logger().warn("Streamline slInit returned error 0x{}", Integer.toHexString(r));
-					initFailed = true;
-					return false;
+					Vitrail.logger().warn("Streamline slInit returned error 0x{}, retrying with standard 2x fallback", Integer.toHexString(r));
+					if (fnSlShutdown != null) {
+						try {
+							fnSlShutdown.invokeExact();
+						} catch (Throwable ignored) {
+						}
+					}
+					if (fnSlMfgConfigure != null) {
+						try {
+							fnSlMfgConfigure.invokeExact(pluginPathSeg, 1);
+						} catch (Throwable ignored) {
+						}
+					}
+					r = (int) fnSlInit.invokeExact(pluginPathSeg, logPathSeg);
+					if (r != 0 && r != 39) {
+						Vitrail.logger().warn("Streamline slInit fallback failed with error 0x{}", Integer.toHexString(r));
+						initFailed = true;
+						return false;
+					}
 				}
 			}
 
@@ -207,7 +327,24 @@ public final class StreamlineBridge {
 			}
 
 			initialized = true;
-			Vitrail.logger().info("NVIDIA Streamline SDK initialized successfully from {}", nativesDir);
+
+			if (fnSlMfgReady != null) {
+				try {
+					mfgReady = ((int) fnSlMfgReady.invokeExact() == 1);
+				} catch (Throwable t) {
+					mfgReady = false;
+				}
+			}
+			if (fnSlMfgPath != null) {
+				try {
+					mfgPath = (int) fnSlMfgPath.invokeExact();
+				} catch (Throwable t) {
+					mfgPath = 0;
+				}
+			}
+
+			Vitrail.logger().info("NVIDIA Streamline SDK initialized successfully from {} (MFG ready={}, path={} [{}])",
+					nativesDir, mfgReady, mfgPath, getMfgPathName());
 			return true;
 		} catch (Throwable t) {
 			Vitrail.logger().error("Failed to initialize Streamline SDK bridge", t);
@@ -222,19 +359,70 @@ public final class StreamlineBridge {
 		initFailed = true;
 	}
 
-	public static void onDeviceCreated(VkDevice device) {
-		usingStreamlineDevice = true;
-		probeSupport(device.getPhysicalDevice().address());
+	private static boolean isAmpereGpu() {
+		try {
+			var adapters = net.caffeinemc.mods.sodium.client.compatibility.environment.probe.GraphicsAdapterProbe.getAdapters();
+			if (adapters != null) {
+				for (var adapter : adapters) {
+					if (adapter.vendor() == net.caffeinemc.mods.sodium.client.compatibility.environment.probe.GraphicsAdapterVendor.NVIDIA) {
+						String desc = adapter.name();
+						if (desc != null && (desc.contains("RTX 30") || desc.contains("GeForce RTX 30"))) {
+							return true;
+						}
+					}
+				}
+			}
+		} catch (Throwable ignored) {
+		}
+		return false;
 	}
 
-	private static void probeSupport(long physicalDevice) {
+	public static void onDeviceCreated(VkDevice device) {
+		usingStreamlineDevice = true;
+		if (!fgSupported) {
+			probeSupport(device.getPhysicalDevice().address());
+		}
+	}
+
+	public static void probeSupport(long physicalDevice) {
 		if (!initialized || fnSlFgSupported == null) return;
 		try {
+			// slAmperePrepare sets s_amperePrepared in ngxshim, which bypasses and suppresses the Ada MFG
+			// patch path if called on Ada (RTX 40) or Blackwell (RTX 50) GPUs. Only call on Ampere (RTX 30).
+			if (fnSlAmperePrepare != null && isAmpereGpu()) {
+				try {
+					int ampR = (int) fnSlAmperePrepare.invokeExact(physicalDevice, 0L);
+					Vitrail.logger().info("Streamline slAmperePrepare returned 0x{}", Integer.toHexString(ampR));
+				} catch (Throwable t) {
+					Vitrail.logger().debug("Streamline slAmperePrepare skipped or not applicable", t);
+				}
+			}
 			int fgResult = (int) fnSlFgSupported.invokeExact(physicalDevice);
-			fgSupported = (fgResult == 0 || fgResult == 39);
+			Path dlssg = getDlssDir().resolve("nvngx_dlssg.dll");
+			fgSupported = (fgResult == 0 || fgResult == 39) && Files.exists(dlssg);
 			int reflexResult = (int) fnSlReflexSupported.invokeExact(physicalDevice);
 			reflexSupported = (reflexResult == 0 || reflexResult == 39);
-			Vitrail.logger().info("Streamline capabilities: DLSS-G supported={}, Reflex supported={}", fgSupported, reflexSupported);
+
+			// Refresh MFG ready flag and path now that adapter features have been probed/patched by ngxshim
+			if (fgSupported && fnSlMfgReady != null) {
+				try {
+					mfgReady = ((int) fnSlMfgReady.invokeExact() == 1);
+				} catch (Throwable t) {
+					mfgReady = false;
+				}
+			} else {
+				mfgReady = false;
+			}
+			if (fnSlMfgPath != null) {
+				try {
+					mfgPath = (int) fnSlMfgPath.invokeExact();
+				} catch (Throwable t) {
+					mfgPath = 0;
+				}
+			}
+
+			Vitrail.logger().info("Streamline capabilities: DLSS-G supported={}, Reflex supported={}, MFG ready={} [{}]",
+					fgSupported, reflexSupported, mfgReady, getMfgPathName());
 		} catch (Throwable t) {
 			Vitrail.logger().warn("Failed to query Streamline feature support", t);
 		}
@@ -380,6 +568,19 @@ public final class StreamlineBridge {
 			prevViewProj.set(viewToClipMatrix);
 			hasPrevViewProj = true;
 
+			// Synchronize dynamic MFG multiplier if requested and ready
+			if (enableFg && isMfgReady() && appliedMultiplier != requestedMultiplier) {
+				FgState state = queryFgState();
+				int maxGen = state.maxGenerated() > 0 ? state.maxGenerated() : 3;
+				int admitted = Math.clamp(requestedMultiplier, 1, maxGen);
+				int effective = requestMfgCount(admitted);
+				if (appliedMultiplier != effective) {
+					appliedMultiplier = effective;
+					Vitrail.logger().info("[Vitrail DLSS-G] Frame generation multiplier updated: requested={}x, effective={}x ({})",
+							requestedMultiplier + 1, effective + 1, getMfgPathName());
+				}
+			}
+
 			int r = (int) fnSlPrepareFrame.invokeExact(
 					frameIndex,
 					enableFg ? 1 : 0,
@@ -484,9 +685,13 @@ public final class StreamlineBridge {
 		return seg;
 	}
 
+	public static Path getDlssDir() {
+		return Vitrail.platform().gameDirectory().resolve("vitrail").resolve("dlss");
+	}
+
 	private static Path extractNatives() {
 		try {
-			Path targetDir = Vitrail.platform().gameDirectory().resolve(".vitrail-natives");
+			Path targetDir = getDlssDir();
 			Files.createDirectories(targetDir);
 
 			for (String dllName : STREAMLINE_DLLS) {
@@ -495,7 +700,7 @@ public final class StreamlineBridge {
 					if (in != null) {
 						Path dest = targetDir.resolve(dllName);
 						byte[] bytes = in.readAllBytes();
-						if (!Files.exists(dest) || Files.size(dest) != bytes.length) {
+						if (!Files.exists(dest) || !java.util.Arrays.equals(Files.readAllBytes(dest), bytes)) {
 							Files.write(dest, bytes);
 						}
 					}
@@ -515,6 +720,14 @@ public final class StreamlineBridge {
 				FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		fnSlMfgConfigure = downcall(linker, lookup, "ngxshim_sl_mfg_configure",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+		fnSlMfgRequest = downcall(linker, lookup, "ngxshim_sl_mfg_request",
+				FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+		fnSlMfgReady = downcall(linker, lookup, "ngxshim_sl_mfg_ready",
+				FunctionDescriptor.of(ValueLayout.JAVA_INT));
+		fnSlMfgPath = downcall(linker, lookup, "ngxshim_sl_mfg_path",
+				FunctionDescriptor.of(ValueLayout.JAVA_INT));
+		fnSlAmperePrepare = downcall(linker, lookup, "ngxshim_sl_ampere_prepare",
+				FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG));
 		fnSlInitialized = downcall(linker, lookup, "ngxshim_sl_initialized",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT));
 		fnSlShutdown = downcall(linker, lookup, "ngxshim_sl_shutdown",

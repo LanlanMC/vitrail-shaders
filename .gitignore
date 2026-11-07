@@ -76,7 +76,7 @@ replay_pid*.log
 
 # Root runtime files and local developer configs
 /config.json
-/nvngx_dlss.dll
+**/nvngx_dlss.dll
 /vitrail_dlss.dll
 **/nvngx_dlssg.dll
 

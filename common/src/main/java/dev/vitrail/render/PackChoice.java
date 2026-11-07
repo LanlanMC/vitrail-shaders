@@ -195,6 +195,7 @@ public final class PackChoice {
 			RenderScale.dlssPreset(parseDlssPreset(askedFor.dlssPreset()));
 			RenderScale.dlssSharpness(askedFor.dlssSharpness());
 			RenderScale.dlssFrameGeneration(askedFor.dlssFrameGeneration());
+			RenderScale.dlssFrameGenerationMultiplier(askedFor.dlssFrameGenerationMultiplier());
 			ReflexBridge.mode(parseReflexMode(askedFor.reflexMode()));
 			// Here and not lower down, because it is read during the expansion of the pack's very
 			// first unit: the shadow map's size is a declaration of the pack's own text, and the
@@ -1089,6 +1090,10 @@ public final class PackChoice {
 		return RenderScale.dlssFrameGeneration();
 	}
 
+	public static int dlssFrameGenerationMultiplier() {
+		return RenderScale.dlssFrameGenerationMultiplier();
+	}
+
 	public static void dlssFrameGeneration(Path gameDirectory, boolean enabled) {
 		RenderScale.dlssFrameGeneration(enabled);
 		askedFor = askedFor.withDlssFrameGeneration(enabled);
@@ -1098,6 +1103,19 @@ public final class PackChoice {
 			PackFile.write(file, PackFile.read(file).withDlssFrameGeneration(enabled));
 		} catch (IOException | RuntimeException e) {
 			Vitrail.logger().error("Vitrail could not write the DLSS Frame Generation state to {}", file, e);
+		}
+	}
+
+	public static void dlssFrameGenerationMultiplier(Path gameDirectory, int multiplier) {
+		int clamped = Math.clamp(multiplier, 1, 3);
+		RenderScale.dlssFrameGenerationMultiplier(clamped);
+		askedFor = askedFor.withDlssFrameGenerationMultiplier(clamped);
+
+		Path file = packFile(gameDirectory);
+		try {
+			PackFile.write(file, PackFile.read(file).withDlssFrameGenerationMultiplier(clamped));
+		} catch (IOException | RuntimeException e) {
+			Vitrail.logger().error("Vitrail could not write the DLSS Frame Generation multiplier to {}", file, e);
 		}
 	}
 

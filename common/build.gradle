@@ -144,50 +144,46 @@ def buildNativeDlss = tasks.register("buildNativeDlss") {
 		def buildDir = new File(nativeSourceDir, "build")
 		def releaseDll = new File(buildDir, "Release/vitrail_dlss.dll")
 
-		// 1. Configure CMake if CMakeCache.txt does not exist
-		if (!new File(buildDir, "CMakeCache.txt").exists()) {
+		// 1 & 2. Try building via CMake if available; fallback to pre-built binary
+		try {
+			if (!new File(buildDir, "CMakeCache.txt").exists()) {
+				providers.exec {
+					it.workingDir = nativeSourceDir
+					it.commandLine "cmake", "-B", "build", "-S", "."
+				}.result.get().rethrowFailure()
+			}
 			providers.exec {
 				it.workingDir = nativeSourceDir
-				it.commandLine "cmake", "-B", "build", "-S", "."
+				it.commandLine "cmake", "--build", "build", "--config", "Release"
 			}.result.get().rethrowFailure()
+		} catch (Exception e) {
+			logger.warn("CMake build skipped or failed; using pre-built DLL: ${e.message}")
 		}
 
-		// 2. Build Release config
-		providers.exec {
-			it.workingDir = nativeSourceDir
-			it.commandLine "cmake", "--build", "build", "--config", "Release"
-		}.result.get().rethrowFailure()
-
-		if (releaseDll.exists()) {
+		def fallbackDll = new File(projectDir, "src/main/resources/natives/windows/x86_64/vitrail_dlss.dll")
+		def sourceDll = releaseDll.exists() ? releaseDll : (fallbackDll.exists() ? fallbackDll : null)
+		if (sourceDll != null) {
 			project.copy {
-				from releaseDll
+				from sourceDll
 				into targetDir
 			}
 		} else {
-			throw new GradleException("buildNativeDlss failed: ${releaseDll} not found")
+			throw new GradleException("buildNativeDlss failed: neither ${releaseDll} nor ${fallbackDll} found")
 		}
 
-		// 3. If DLSS Swapper dlss_g is found on the local machine, bundle latest nvngx_dlssg.dll
-		def localAppData = System.getenv("LOCALAPPDATA") ?: "${System.getProperty('user.home')}/AppData/Local"
-		def swapperGDir = new File(localAppData, "DLSS Swapper/dlls/dlss_g")
-		if (swapperGDir.exists() && swapperGDir.isDirectory()) {
-			def versions = swapperGDir.listFiles().findAll { it.isDirectory() }.sort { it.name }.reverse()
-			for (verDir in versions) {
-				def dlssgDll = new File(verDir, "nvngx_dlssg.dll")
-				if (dlssgDll.exists()) {
-					project.copy {
-						from dlssgDll
-						into targetDir
-					}
-					def resDir = new File(projectDir, "src/main/resources/natives/windows/x86_64")
-					resDir.mkdirs()
-					project.copy {
-						from dlssgDll
-						into resDir
-					}
-					println "Bundled nvngx_dlssg.dll from DLSS Swapper (${verDir.name})"
-					break
-				}
+		// 3. Keep bundled nvngx_dlssg.dll and nvngx_dlss.dll matching ngxshim Ada MFG signature (310.9.1)
+		def bundledDlssg = new File(projectDir, "src/main/resources/natives/windows/x86_64/nvngx_dlssg.dll")
+		if (bundledDlssg.exists()) {
+			project.copy {
+				from bundledDlssg
+				into targetDir
+			}
+		}
+		def bundledDlss = new File(projectDir, "src/main/resources/natives/windows/x86_64/nvngx_dlss.dll")
+		if (bundledDlss.exists()) {
+			project.copy {
+				from bundledDlss
+				into targetDir
 			}
 		}
 	}

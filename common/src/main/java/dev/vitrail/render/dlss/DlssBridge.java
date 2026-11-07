@@ -48,7 +48,7 @@ public final class DlssBridge {
 	private static int currentDlssgWidth = 0;
 	private static int currentDlssgHeight = 0;
 	private static int dlssgEvalFailureCount = 0;
-	private static Path swapperDlssGPath = null;
+	private static Path dlssGDllPath = null;
 	private static String dlssGVersion = null;
 
 	private static MethodHandle fnIsSupported;
@@ -72,8 +72,21 @@ public final class DlssBridge {
 	private DlssBridge() {
 	}
 
+	public static Path getDlssDir() {
+		return Vitrail.platform().gameDirectory().resolve("vitrail").resolve("dlss");
+	}
+
 	private static void loadBridge() {
 		try {
+			Path dlssDir = getDlssDir();
+			ensureDlssExtracted();
+			Path nvngxDlss = dlssDir.resolve("nvngx_dlss.dll");
+			if (!Files.exists(nvngxDlss)) {
+				Vitrail.logger().info("NVIDIA DLSS library (nvngx_dlss.dll) not found in {}; DLSS disabled", dlssDir);
+				available = false;
+				return;
+			}
+
 			SymbolLookup lookup = findSymbolLookup();
 			if (lookup == null) {
 				Vitrail.logger().info("DLSS native library ({}) not found; DLSS will be disabled", DLL_NAME);
@@ -137,12 +150,8 @@ public final class DlssBridge {
 			fnShutdown = downcall(linker, lookup, "vitrail_dlss_shutdown",
 					FunctionDescriptor.ofVoid());
 
-			discoverDlssGFromSwapper();
-
 			if (fnDlssgIsSupported != null) {
-				Vitrail.logger().info("DLSS bridge DLSS-G symbols resolved successfully");
-			} else {
-				Vitrail.logger().warn("DLSS bridge DLL loaded, but DLSS-G symbols not found (DLL might be outdated)");
+				Vitrail.logger().debug("DLSS bridge DLSS-G symbols resolved successfully");
 			}
 
 			int supported = (int) fnIsSupported.invokeExact();
@@ -161,7 +170,7 @@ public final class DlssBridge {
 
 	private static void trySyncDevDll(Path sourceDll) {
 		try {
-			Path targetDir = Vitrail.platform().gameDirectory().resolve(".vitrail-natives");
+			Path targetDir = getDlssDir();
 			Files.createDirectories(targetDir);
 			Path target = targetDir.resolve(DLL_NAME);
 			if (!Files.exists(target) || Files.size(target) != Files.size(sourceDll)) {
@@ -169,16 +178,21 @@ public final class DlssBridge {
 			}
 		} catch (Exception ignored) {
 		}
-		try {
-			Path runDll = Vitrail.platform().gameDirectory().resolve(DLL_NAME);
-			if (!Files.exists(runDll) || Files.size(runDll) != Files.size(sourceDll)) {
-				Files.copy(sourceDll, runDll, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-			}
-		} catch (Exception ignored) {
-		}
 	}
 
 	private static SymbolLookup findSymbolLookup() {
+		Path targetDir = getDlssDir();
+		Path localDll = targetDir.resolve(DLL_NAME);
+		if (Files.isRegularFile(localDll)) {
+			try {
+				SymbolLookup lookup = SymbolLookup.libraryLookup(localDll.toAbsolutePath(), Arena.global());
+				if (lookup.find("vitrail_dlssg_is_supported").isPresent()) {
+					return lookup;
+				}
+			} catch (Exception ignored) {
+			}
+		}
+
 		// 1. Check local build output from CMake build directory (development mode)
 		List<Path> devSearchPaths = List.of(
 				Path.of("native/dlss/build/Release", DLL_NAME),
@@ -191,7 +205,7 @@ public final class DlssBridge {
 				try {
 					SymbolLookup lookup = SymbolLookup.libraryLookup(devBuildDll.toAbsolutePath(), Arena.global());
 					if (lookup.find("vitrail_dlssg_is_supported").isPresent()) {
-						Vitrail.logger().info("Loaded DLSS native bridge DLL from CMake build: {}", devBuildDll.toAbsolutePath());
+						Vitrail.logger().debug("Loaded DLSS native bridge DLL from CMake build: {}", devBuildDll.toAbsolutePath());
 						trySyncDevDll(devBuildDll);
 						return lookup;
 					}
@@ -205,48 +219,19 @@ public final class DlssBridge {
 			String resPath = "/natives/windows/x86_64/" + DLL_NAME;
 			try (var in = DlssBridge.class.getResourceAsStream(resPath)) {
 				if (in != null) {
-					Path extractDir = Vitrail.platform().gameDirectory().resolve(".vitrail-natives");
-					Files.createDirectories(extractDir);
-					Path extracted = extractDir.resolve(DLL_NAME);
+					Files.createDirectories(targetDir);
+					Path extracted = targetDir.resolve(DLL_NAME);
 					byte[] resBytes = in.readAllBytes();
 					if (!Files.exists(extracted) || Files.size(extracted) != resBytes.length) {
 						Files.write(extracted, resBytes);
 					}
 					SymbolLookup lookup = SymbolLookup.libraryLookup(extracted.toAbsolutePath(), Arena.global());
 					if (lookup.find("vitrail_dlssg_is_supported").isPresent()) {
-						Vitrail.logger().info("Loaded DLSS native bridge DLL from extracted resources: {}", extracted.toAbsolutePath());
+						Vitrail.logger().debug("Loaded DLSS native bridge DLL from extracted resources: {}", extracted.toAbsolutePath());
 						return lookup;
 					}
 				}
 			}
-		} catch (Exception ignored) {
-		}
-
-		// 3. Fallback: check working directory or game directory
-		Path[] searchPaths = new Path[] {
-				Vitrail.platform().gameDirectory().resolve(DLL_NAME),
-				Vitrail.platform().gameDirectory().resolve(".vitrail-natives").resolve(DLL_NAME),
-				Vitrail.platform().gameDirectory().resolve("mods").resolve(DLL_NAME),
-				Path.of(DLL_NAME),
-				Path.of("mods", DLL_NAME)
-		};
-
-		for (Path p : searchPaths) {
-			if (Files.isRegularFile(p)) {
-				try {
-					SymbolLookup lookup = SymbolLookup.libraryLookup(p.toAbsolutePath(), Arena.global());
-					if (lookup.find("vitrail_dlssg_is_supported").isPresent()) {
-						Vitrail.logger().info("Loaded DLSS native bridge DLL from fallback path: {}", p.toAbsolutePath());
-						return lookup;
-					}
-				} catch (Exception ignored) {
-				}
-			}
-		}
-
-		// 4. Try loading from system loader
-		try {
-			return SymbolLookup.loaderLookup();
 		} catch (Exception ignored) {
 		}
 
@@ -298,9 +283,37 @@ public final class DlssBridge {
 		initFailed = false;
 	}
 
+	private static void ensureDlssExtracted() {
+		try {
+			Path extractDir = getDlssDir();
+			Files.createDirectories(extractDir);
+			Path target = extractDir.resolve("nvngx_dlss.dll");
+			if (!Files.exists(target)) {
+				String resPath = "/natives/windows/x86_64/nvngx_dlss.dll";
+				try (var in = DlssBridge.class.getResourceAsStream(resPath)) {
+					if (in != null) {
+						Files.write(target, in.readAllBytes());
+					}
+				}
+			}
+			Path targetG = extractDir.resolve("nvngx_dlssg.dll");
+			if (!Files.exists(targetG)) {
+				String resGPath = "/natives/windows/x86_64/nvngx_dlssg.dll";
+				try (var in = DlssBridge.class.getResourceAsStream(resGPath)) {
+					if (in != null) {
+						Files.write(targetG, in.readAllBytes());
+					}
+				}
+			}
+		} catch (Exception ignored) {
+		}
+	}
+
 	public static boolean init(VulkanDevice device, Path logDir) {
 		if (!available || fnInit == null || initFailed) return false;
 		if (initialized) return true;
+
+		ensureDlssExtracted();
 
 		long vkDevice = DlssVulkanHandles.vkDevice(device);
 		long vkPhysical = DlssVulkanHandles.vkPhysicalDevice(device);
@@ -322,7 +335,7 @@ public final class DlssBridge {
 
 			int res;
 			if (fnInitV2 != null) {
-				Path dlssGDll = discoverDlssGFromSwapper();
+				Path dlssGDll = getDlssGDllPath();
 				String dlssGPathStr = dlssGDll != null ? dlssGDll.toAbsolutePath().toString() : "";
 				MemorySegment dlssGSeg = arena.allocateFrom(dlssGPathStr, java.nio.charset.StandardCharsets.UTF_16LE);
 				res = (int) fnInitV2.invokeExact(0x2602L, pathSeg, instSeg, pdSeg, devSeg, dlssGSeg);
@@ -511,12 +524,12 @@ public final class DlssBridge {
 
 	public static boolean isFrameGenerationSupported() {
 		if (!available) return false;
+		Path dlssg = getDlssDir().resolve("nvngx_dlssg.dll");
+		if (!Files.exists(dlssg)) return false;
 		if (initialized) {
 			return frameGenerationSupported;
 		}
-		// Before Vulkan NGX initialization (e.g. title screen / settings menu),
-		// allow toggling if DLSS bridge exports DLSS-G symbols and nvngx_dlssg.dll is available.
-		return fnDlssgIsSupported != null && (discoverDlssGFromSwapper() != null || swapperDlssGPath != null);
+		return fnDlssgIsSupported != null;
 	}
 
 	public static boolean isFrameGenerationCreated() {
@@ -528,105 +541,16 @@ public final class DlssBridge {
 	}
 
 	public static String getDlssGVersion() {
-		if (dlssGVersion == null) {
-			return "v3.x";
-		}
-		var m = java.util.regex.Pattern.compile("v\\d+(\\.\\d+)+").matcher(dlssGVersion);
-		if (m.find()) {
-			return m.group();
-		}
-		return dlssGVersion;
+		return "v3.x";
+	}
+
+	public static Path getDlssGDllPath() {
+		Path target = getDlssDir().resolve("nvngx_dlssg.dll");
+		return Files.isRegularFile(target) ? target : null;
 	}
 
 	public static Path swapperDlssGPath() {
-		return swapperDlssGPath;
-	}
-
-	public static Path discoverDlssGFromSwapper() {
-		if (swapperDlssGPath != null && Files.exists(swapperDlssGPath)) {
-			return swapperDlssGPath;
-		}
-
-		String localAppData = System.getenv("LOCALAPPDATA");
-		if (localAppData == null || localAppData.isBlank()) {
-			String userHome = System.getProperty("user.home");
-			localAppData = userHome != null ? userHome + "\\AppData\\Local" : null;
-		}
-
-		if (localAppData != null) {
-			Path swapperDir = Path.of(localAppData, "DLSS Swapper", "dlls", "dlss_g");
-			if (Files.isDirectory(swapperDir)) {
-				try (var stream = Files.list(swapperDir)) {
-					List<Path> dirs = stream
-							.filter(Files::isDirectory)
-							.sorted(Comparator.comparing((Path p) -> p.getFileName().toString()).reversed())
-							.toList();
-					for (Path d : dirs) {
-						Path dll = d.resolve("nvngx_dlssg.dll");
-						if (Files.isRegularFile(dll)) {
-							swapperDlssGPath = dll;
-							dlssGVersion = d.getFileName().toString();
-							Vitrail.logger().info("Found DLSS Frame Generation library in DLSS Swapper: {} ({})", dll, dlssGVersion);
-							trySyncToRuntime(dll);
-							return dll;
-						}
-					}
-				} catch (Exception e) {
-					Vitrail.logger().debug("Error scanning DLSS Swapper directory: {}", e.getMessage());
-				}
-			}
-		}
-
-		// Fallback: check .vitrail-natives or game directory
-		Path localNatives = Vitrail.platform().gameDirectory().resolve(".vitrail-natives").resolve("nvngx_dlssg.dll");
-		if (Files.isRegularFile(localNatives)) {
-			swapperDlssGPath = localNatives;
-			return localNatives;
-		}
-		Path workDirDll = Path.of("nvngx_dlssg.dll");
-		if (Files.isRegularFile(workDirDll)) {
-			swapperDlssGPath = workDirDll.toAbsolutePath();
-			return swapperDlssGPath;
-		}
-
-		// Fallback: extract from jar resources
-		try {
-			String resPath = "/natives/windows/x86_64/nvngx_dlssg.dll";
-			try (var in = DlssBridge.class.getResourceAsStream(resPath)) {
-				if (in != null) {
-					Path nativesDir = Vitrail.platform().gameDirectory().resolve(".vitrail-natives");
-					Files.createDirectories(nativesDir);
-					Path targetDll = nativesDir.resolve("nvngx_dlssg.dll");
-					if (!Files.exists(targetDll)) {
-						Files.copy(in, targetDll, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-					}
-					if (Files.isRegularFile(targetDll)) {
-						swapperDlssGPath = targetDll;
-						dlssGVersion = "Bundled DLSS-G";
-						return targetDll;
-					}
-				}
-			}
-		} catch (Exception ignored) {
-		}
-
-		return null;
-	}
-
-	private static void trySyncToRuntime(Path sourceDll) {
-		try {
-			Path nativesDir = Vitrail.platform().gameDirectory().resolve(".vitrail-natives");
-			Files.createDirectories(nativesDir);
-			Path targetDll = nativesDir.resolve("nvngx_dlssg.dll");
-			if (!Files.exists(targetDll) || Files.size(targetDll) != Files.size(sourceDll)) {
-				Files.copy(sourceDll, targetDll, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-			}
-			Path workDirDll = Path.of("nvngx_dlssg.dll");
-			if (!Files.exists(workDirDll) || Files.size(workDirDll) != Files.size(sourceDll)) {
-				Files.copy(sourceDll, workDirDll, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-			}
-		} catch (Exception ignored) {
-		}
+		return getDlssGDllPath();
 	}
 
 	public static boolean createFrameGenerationFeature(long cmdBuffer, int width, int height, boolean isHdr, boolean depthInverted, int backbufferFormat) {

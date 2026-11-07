@@ -342,6 +342,7 @@ public abstract class VulkanBackendMixin {
 	) {
 		if (StreamlineBridge.isCandidate() && StreamlineBridge.prepareStreamline()) {
 			try {
+				StreamlineBridge.probeSupport(physicalDevice.address());
 				long allocAddr = pAllocator != null ? pAllocator.address() : 0L;
 				int res = StreamlineBridge.streamlineCreateDevice(physicalDevice.address(), pCreateInfo.address(), allocAddr, pDevice.address());
 				if (res == 0) {

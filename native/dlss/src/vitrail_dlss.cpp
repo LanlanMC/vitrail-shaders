@@ -7,14 +7,7 @@
 #include <cstdarg>
 
 static void LogNative(const char* fmt, ...) {
-    static FILE* s_log = fopen("vitrail_dlss_native.log", "a");
-    if (s_log) {
-        va_list args;
-        va_start(args, fmt);
-        vfprintf(s_log, fmt, args);
-        va_end(args);
-        fflush(s_log);
-    }
+    // Disabled to eliminate unnecessary logging
 }
 
 // Function pointer typedefs matching nvngx.dll exports
@@ -221,9 +214,8 @@ int vitrail_dlss_init_v2(
         searchPaths[searchPathCount++] = s_currentDir;
         LogNative("[Init] SearchPath[%u] (CurrentDir): %ls\n", searchPathCount - 1, s_currentDir);
 
-        swprintf_s(s_nativesDir, L"%s\\.vitrail-natives", s_currentDir);
+        swprintf_s(s_nativesDir, L"%s\\vitrail\\dlss", s_currentDir);
         searchPaths[searchPathCount++] = s_nativesDir;
-        LogNative("[Init] SearchPath[%u] (NativesDir): %ls\n", searchPathCount - 1, s_nativesDir);
     }
 
     if (appDataPath && appDataPath[0] != L'\0') {
@@ -233,7 +225,6 @@ int vitrail_dlss_init_v2(
         if (lastSlash) {
             *lastSlash = L'\0';
             searchPaths[searchPathCount++] = s_appDataParent;
-            LogNative("[Init] SearchPath[%u] (AppDataParent): %ls\n", searchPathCount - 1, s_appDataParent);
         }
     }
 
@@ -244,40 +235,6 @@ int vitrail_dlss_init_v2(
         if (lastSlash) {
             *lastSlash = L'\0';
             searchPaths[searchPathCount++] = s_customDlssGDir;
-            LogNative("[Init] SearchPath[%u] (DLSS-G Swapper): %ls\n", searchPathCount - 1, s_customDlssGDir);
-
-            // Traverse up to find DLSS Swapper's dlss folder
-            wchar_t swapperDllsBase[MAX_PATH] = { 0 };
-            wcsncpy_s(swapperDllsBase, s_customDlssGDir, MAX_PATH - 1);
-            wchar_t* s1 = wcsrchr(swapperDllsBase, L'\\');
-            if (s1) {
-                *s1 = L'\0';
-                wchar_t* s2 = wcsrchr(swapperDllsBase, L'\\');
-                if (s2) {
-                    *s2 = L'\0';
-                    wchar_t dlssSearchPattern[MAX_PATH] = { 0 };
-                    swprintf_s(dlssSearchPattern, L"%s\\dlss\\*", swapperDllsBase);
-                    WIN32_FIND_DATAW findData;
-                    HANDLE hFind = FindFirstFileW(dlssSearchPattern, &findData);
-                    if (hFind != INVALID_HANDLE_VALUE) {
-                        do {
-                            if ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-                                wcscmp(findData.cFileName, L".") != 0 &&
-                                wcscmp(findData.cFileName, L"..") != 0) {
-                                swprintf_s(s_swapperDlssDir, L"%s\\dlss\\%s", swapperDllsBase, findData.cFileName);
-                                wchar_t testDll[MAX_PATH];
-                                swprintf_s(testDll, L"%s\\nvngx_dlss.dll", s_swapperDlssDir);
-                                if (GetFileAttributesW(testDll) != INVALID_FILE_ATTRIBUTES) {
-                                    searchPaths[searchPathCount++] = s_swapperDlssDir;
-                                    LogNative("[Init] SearchPath[%u] (DLSS Swapper dlss): %ls\n", searchPathCount - 1, s_swapperDlssDir);
-                                    break;
-                                }
-                            }
-                        } while (FindNextFileW(hFind, &findData));
-                        FindClose(hFind);
-                    }
-                }
-            }
         }
     }
 

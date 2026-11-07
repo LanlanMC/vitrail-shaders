@@ -161,8 +161,13 @@ public final class ReflexBridge {
 
 		if (StreamlineBridge.usesStreamline()) {
 			int reflexModeOrdinal = mode.ordinal();
-			if (RenderScale.dlssFrameGeneration() && reflexModeOrdinal == 0) {
-				reflexModeOrdinal = ReflexMode.ON.ordinal();
+			if (RenderScale.dlssFrameGeneration()) {
+				if (StreamlineBridge.getEffectiveMultiplier() >= 2) {
+					// 3x/4x Multi-Frame Generation benefits from Reflex Boost to minimize input queue latency
+					reflexModeOrdinal = ReflexMode.ON_BOOST.ordinal();
+				} else if (reflexModeOrdinal == 0) {
+					reflexModeOrdinal = ReflexMode.ON.ordinal();
+				}
 			}
 			int frameLimitUs = 0;
 			try {

@@ -38,7 +38,7 @@
 	"options.vitrail.dlss_sharpness": "DLSS Sharpness",
 	"options.vitrail.dlss_sharpness_tooltip": "DLSS image sharpening intensity.\nHigher values produce crisper edges and textures, but may accentuate aliasing or noise.\nAdjusts in real time without pack reload.",
 	"options.vitrail.dlss_frame_generation": "DLSS Frame Generation",
-	"options.vitrail.dlss_frame_generation_tooltip": "Generates intermediate frames using NVIDIA Ada Lovelace Optical Flow Accelerator to multiply frame rates.\nRequires an NVIDIA RTX 40-series GPU and automatically enables NVIDIA Reflex.\nTakes effect immediately, no reload needed.",
+	"options.vitrail.dlss_frame_generation_tooltip": "Generates intermediate frames using NVIDIA Optical Flow Accelerator to multiply frame rates.\nSupports 2x (Standard FG) and 3x / 4x Multi-Frame Generation (MFG).\nRequires an NVIDIA RTX 40/50-series GPU and automatically enables NVIDIA Reflex.\nTakes effect immediately, no reload needed.",
 	"options.vitrail.temporal_fold": "Temporal Fold",
 	"options.vitrail.temporal_fold_tooltip": "Folds several upscaled frames into one, so a lower Render Scale keeps more detail.\nDistant leaves and fences stop crawling. Things that move keep a faint trail.\nNeeds a Render Scale under 100%.\nApplies at the next frame. No pack reload.",
 	"options.vitrail.reflex_mode": "NVIDIA Reflex",

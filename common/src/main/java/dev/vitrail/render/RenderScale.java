@@ -554,6 +554,7 @@ public final class RenderScale {
 	private static int lastTargetHeight;
 	private static boolean lastDlssEvaluated;
 	private static boolean dlssFrameGeneration = false;
+	private static int dlssFrameGenerationMultiplier = 1;
 	private static boolean lastDlssgEvaluated = false;
 	private static boolean hasPendingInterpolatedFrame = false;
 
@@ -563,6 +564,15 @@ public final class RenderScale {
 
 	public static boolean dlssFrameGeneration() {
 		return dlssFrameGeneration;
+	}
+
+	public static int dlssFrameGenerationMultiplier() {
+		return dlssFrameGenerationMultiplier;
+	}
+
+	public static void dlssFrameGenerationMultiplier(int multiplier) {
+		dlssFrameGenerationMultiplier = Math.max(1, multiplier);
+		dev.vitrail.render.streamline.StreamlineBridge.setRequestedMultiplier(dlssFrameGenerationMultiplier);
 	}
 
 	public static void dlssFrameGeneration(boolean enabled) {

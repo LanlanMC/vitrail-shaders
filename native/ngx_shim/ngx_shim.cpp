@@ -52,7 +52,7 @@ static int g_lastResult = 0;
 static void NVSDK_CONV ngxshim_log_callback(const char* message,
                                             NVSDK_NGX_Logging_Level level,
                                             NVSDK_NGX_Feature component) {
-    if (level <= NVSDK_NGX_LOGGING_LEVEL_ON) {
+    if (g_verbose && level <= NVSDK_NGX_LOGGING_LEVEL_ON) {
         std::fprintf(stderr, "[ngx_core L%d C%d] %s", (int) level, (int) component, message ? message : "(null)");
         size_t n = message ? std::strlen(message) : 0;
         if (n == 0 || message[n - 1] != '\n') {
